@@ -1,0 +1,15 @@
+[app]
+environment = "development"
+log_level = "info"
+
+[market_data]
+symbols = ["BTCUSDT", "ETHUSDT"]
+binance_ws_url = "wss://stream.binance.com:9443/ws"
+binance_rest_url = "https://api.binance.com"
+reconnect_interval_ms = 2000
+channel_buffer_size = 10000
+
+[storage]
+database_url = "postgres://quant_user:quant_password@localhost:5432/trading_engine"
+redis_url = "redis://127.0.0.1:6379"
+enable_db_persistence = true

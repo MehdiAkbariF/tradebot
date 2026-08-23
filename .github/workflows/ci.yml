@@ -1,0 +1,68 @@
+name: CI Pipeline
+
+on:
+  push:
+    branches: [ main, master, develop ]
+  pull_request:
+    branches: [ main, master, develop ]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # ----------------------------------------------------
+  # 1. Rust Quality & Test Job
+  # ----------------------------------------------------
+  rust-check:
+    name: Rust Core (Format, Clippy, Test)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache Cargo dependencies
+        uses: Swatinem/rust-cache@v2
+
+      - name: Check Formatting
+        run: cargo fmt --all -- --check
+
+      - name: Run Clippy Linter
+        run: cargo clippy --all-targets --all-features -- -D warnings
+
+      - name: Run Rust Unit Tests
+        run: cargo test --workspace --verbose
+
+  # ----------------------------------------------------
+  # 2. Python Quality & Test Job
+  # ----------------------------------------------------
+  python-check:
+    name: Python Intelligence (Lint & Unit Tests)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install ruff pytest pydantic
+          if [ -f python_engine/requirements.txt ]; then pip install -r python_engine/requirements.txt; fi
+
+      - name: Lint with Ruff
+        run: |
+          ruff check .
+        continue-on-error: true
+
+      - name: Run Pytest
+        run: |
+          if [ -d "python_engine/tests" ]; then pytest python_engine/tests; fi

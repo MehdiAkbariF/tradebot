@@ -1,0 +1,68 @@
+# ==========================================
+# Environments & Secrets (CRITICAL)
+# ==========================================
+.env
+.env.local
+.env.*.local
+*.pem
+*.key
+*.cert
+secrets/
+
+# ==========================================
+# Rust (Cargo)
+# ==========================================
+/target/
+**/*.rs.bk
+Cargo.lock.bak
+
+# ==========================================
+# Python (Poetry / Uv / Venv / Caches)
+# ==========================================
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.coverage
+htmlcov/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+ENV/
+dist/
+build/
+*.egg-info/
+
+# ==========================================
+# Node.js / Next.js Dashboard
+# ==========================================
+node_modules/
+.next/
+out/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+# ==========================================
+# Databases, Timescale & Storage Artifacts
+# ==========================================
+*.sqlite3
+*.db
+pgdata/
+redis_data/
+*.parquet
+*.feather
+*.h5
+*.arrow
+
+# ==========================================
+# Operating System & IDEs
+# ==========================================
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.sublime-project
+*.sublime-workspace
