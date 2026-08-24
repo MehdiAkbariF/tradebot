@@ -5,4 +5,5 @@ pub mod market_data;
 pub mod storage;
 pub mod signal;
 pub mod risk;
-pub mod backtest; // <--- این خط اضافه شود
+pub mod backtest;
+pub mod analytics; // <--- این خط اضافه شود

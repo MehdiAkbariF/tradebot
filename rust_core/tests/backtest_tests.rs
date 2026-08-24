@@ -1,4 +1,5 @@
 use chrono::Utc;
+use rust_decimal::Decimal; // <--- ایمپورت Decimal برای فایل تست
 use rust_decimal_macros::dec;
 use rust_core::backtest::engine::{BacktestConfig, EventDrivenBacktester};
 
