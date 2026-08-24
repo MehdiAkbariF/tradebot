@@ -4,5 +4,4 @@ pub mod error;
 pub mod market_data;
 pub mod storage;
 pub mod signal;
-pub mod risk;
-pub mod backtest; // <--- این خط اضافه شود
+pub mod risk; // <--- این خط اضافه شود
