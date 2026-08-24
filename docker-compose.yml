@@ -1,0 +1,26 @@
+version: '3.8'
+
+services:
+  timescaledb:
+    image: timescale/timescaledb:latest-pg16
+    container_name: trading_postgres
+    restart: always
+    environment:
+      POSTGRES_DB: trading_engine
+      POSTGRES_USER: quant_user
+      POSTGRES_PASSWORD: quant_password
+      POSTGRES_HOST_AUTH_METHOD: md5
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+  redis:
+    image: redis:7-alpine
+    container_name: trading_redis
+    restart: always
+    ports:
+      - "6379:6379"
+
+volumes:
+  pgdata:

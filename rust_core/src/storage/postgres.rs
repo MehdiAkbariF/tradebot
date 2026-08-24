@@ -9,7 +9,8 @@ pub struct PostgresStore {
 }
 
 impl PostgresStore {
-    pub async fn new(database_url: &str) -> Result<Self> {
+ pub async fn new(database_url: &str) -> Result<Self> {
+        tracing::info!("Attempting to connect to PostgreSQL with URL: {}", database_url);
         let pool = PgPoolOptions::new()
             .max_connections(10)
             .connect(database_url)
