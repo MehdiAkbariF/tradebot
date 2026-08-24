@@ -6,4 +6,5 @@ pub mod storage;
 pub mod signal;
 pub mod risk;
 pub mod backtest;
-pub mod analytics; // <--- این خط اضافه شود
+pub mod analytics;
+pub mod execution; // <--- این خط اضافه شود
