@@ -1,14 +1,8 @@
-mod config;
-mod domain;
-mod error;
-mod market_data;
-mod storage;
-
-use config::Settings;
-use domain::book::OrderBook;
-use market_data::binance::{BinanceClient, MarketEvent};
-use storage::postgres::PostgresStore;
-use storage::redis::RedisPublisher;
+use rust_core::config::Settings;
+use rust_core::domain::book::OrderBook;
+use rust_core::market_data::binance::{BinanceClient, MarketEvent};
+use rust_core::storage::postgres::PostgresStore;
+use rust_core::storage::redis::RedisPublisher;
 use std::collections::HashMap;
 use tokio::sync::mpsc;
 use tracing::{error, info, Level};
@@ -23,7 +17,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .finish();
     tracing::subscriber::set_global_default(subscriber)?;
 
-    info!("Starting MI-EDTE Market Data Engine (Milestone 1)...");
+    info!("Starting MI-EDTE Market Data Engine (Milestone 1 & 2)...");
 
     // 2. Load Configuration
     let settings = Settings::new()?;

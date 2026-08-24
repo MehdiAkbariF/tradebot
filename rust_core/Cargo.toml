@@ -3,6 +3,14 @@ name = "rust_core"
 version = "0.1.0"
 edition = "2021"
 
+[lib]
+name = "rust_core"
+path = "src/lib.rs"
+
+[[bin]]
+name = "rust_core"
+path = "src/main.rs"
+
 [dependencies]
 tokio = { version = "1.38", features = ["full"] }
 tokio-tungstenite = { version = "0.23", features = ["native-tls"] }
