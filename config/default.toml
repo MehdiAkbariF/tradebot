@@ -16,10 +16,13 @@ enable_db_persistence = false
 
 [trading]
 initial_capital = 100000.0
-notional_per_trade = 30000.0    # حجم ۳۰ هزار دلاری برای سودهای چشمگیر ۱۵۰ تا ۲۰۰ دلاری
-take_profit_bps = 50.0          # تارگت سود قدرتمند +0.50% (+150$ سود خالص)
-stop_loss_bps = 20.0            # استاپ کنترل‌شده -0.20% (-60$)
-breakeven_trigger_bps = 15.0    # قفل کارمزد و سود در +0.15%
-max_holding_seconds = 180       # ۳ دقیقه فرصت برای پرواز امواج سود
+notional_per_trade = 15000.0
+take_profit_bps = 25.0
+stop_loss_bps = 15.0
+breakeven_trigger_bps = 8.0
+max_holding_seconds = 60
 max_spread_bps = 1.0
-min_ml_confidence = 0.70
+min_ml_confidence = 0.65
+maker_fee_bps = 1.0
+min_volatility_bps = 5.0
+maker_timeout_seconds = 5

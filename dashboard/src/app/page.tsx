@@ -5,10 +5,10 @@ import Header from '../components/Header';
 import MarketView from '../components/MarketView';
 import NewsFeed from '../components/NewsFeed';
 import SignalsView from '../components/SignalsView';
-import { useLiveTerminal } from '../hooks/useLiveTerminal';
+import { useTerminal } from '../context/TerminalContext';
 
 export default function DashboardPage() {
-  const terminal = useLiveTerminal();
+  const terminal = useTerminal();
 
   return (
     <main className="min-h-screen bg-slate-950 flex flex-col font-sans">

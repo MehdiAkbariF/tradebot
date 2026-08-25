@@ -102,43 +102,56 @@ class RealtimeScalpBridge:
         p_5s = prices[-6] if len(prices) >= 6 else prices[0]
         ret_5s = (p_now - p_5s) / p_5s if p_5s > 0 else 0.0
 
-        # ۱. روندسنجی ۱ دقیقه‌ای
-        df_candles = builder.get_df() if builder else pd.DataFrame()
-        if len(df_candles) >= 3:
-            ema_fast = float(df_candles["close"].ewm(span=4, adjust=False).mean().iloc[-1])
-            ema_slow = float(df_candles["close"].ewm(span=12, adjust=False).mean().iloc[-1])
-            trend_bias = 1.0 if ema_fast >= ema_slow else -1.0
+        # ۱. محاسبه دامنه نوسان واقعی ۳۰ تیک اخیر
+        sub_30 = prices[-30:]
+        volatility_bps = float(((max(sub_30) - min(sub_30)) / sub_30[0]) * 10000.0) if len(sub_30) > 1 else 0.0
+
+        # فیلتر بازار بدون نوسان (زیر 0.60 پیپ)
+        if volatility_bps < 0.60:
+            now_sec = now.timestamp()
+            if (now_sec - self.last_heartbeat_time) > 8.0:
+                self.last_heartbeat_time = now_sec
+                logger.info(f"💤 STANDBY (Low Volatility): {symbol} Vol={volatility_bps:.2f} bps | Waiting for range expansion...")
+            return None
+
+        # ۲. فیلتر ترند قدرتمند بر اساس میانگین متحرک ۳۰۰ تیک اخیر (جلوگیری از خرید در ریزش)
+        long_window = min(len(prices), 300)
+        ma_long = float(np.mean(prices[-long_window:]))
+        
+        if p_now > ma_long:
+            trend_bias = 1.0
+            trend_str = "BULLISH 🟢"
         else:
-            series_p = pd.Series(prices)
-            trend_bias = 1.0 if float(series_p.ewm(span=30).mean().iloc[-1]) >= float(series_p.ewm(span=90).mean().iloc[-1]) else -1.0
+            trend_bias = -1.0
+            trend_str = "BEARISH 🔴"
 
-        trend_str = "BULLISH 🟢" if trend_bias > 0 else "BEARISH 🔴"
-
-        # ۲. عدم تعادل بوک (OFI)
-        b_vol = sum(list(hist_bv)[-25:])
-        s_vol = sum(list(hist_sv)[-25:])
+        # ۳. محاسبه عدم تعادل بوک (OFI) با ۶۰ تیک اخیر جهت حذف نویز تک‌تیک‌ها
+        ofi_window = min(len(hist_bv), 60)
+        b_vol = sum(list(hist_bv)[-ofi_window:])
+        s_vol = sum(list(hist_sv)[-ofi_window:])
         tot_vol = b_vol + s_vol
         live_ofi = float((b_vol - s_vol) / tot_vol) if tot_vol > 0 else 0.0
 
         decayed_sentiment = self.get_decayed_sentiment()
         now_sec = now.timestamp()
 
-        # فرمول آلفا با تمرکز روی ورودهای پرقدرت
-        alpha_score = (trend_bias * 0.45) + (live_ofi * 0.35) + (np.clip(ret_5s * 2500.0, -0.20, 0.20)) + (decayed_sentiment * 0.15)
+        # محاسبه امتیاز آلفا
+        alpha_score = (trend_bias * 0.45) + (live_ofi * 0.40) + (np.clip(ret_5s * 2500.0, -0.20, 0.20)) + (decayed_sentiment * 0.05)
 
         if (now_sec - self.last_heartbeat_time) > 5.0:
             self.last_heartbeat_time = now_sec
             logger.info(
                 f"📊 LIVE SCAN: {symbol} = ${p_now:,.2f} | "
                 f"Trend: {trend_str} | "
+                f"Range: {volatility_bps:.2f} bps | "
                 f"OFI: {live_ofi:+.2f} | "
-                f"Alpha: {alpha_score:+.2f} | "
-                f"Ret5s: {ret_5s*100:+.3f}%"
+                f"Alpha: {alpha_score:+.2f}"
             )
 
-        # ۳. صدور سیگنال تک‌تیرانداز با وقفه ۲۵ ثانیه برای ثبت سودهای سنگین
-        if (now_sec - self.last_signal_time[symbol]) > 25.0:
-            if trend_bias > 0 and alpha_score >= 0.35 and live_ofi > 0.10:
+        # ۴. صدور سیگنال اسکلپ همراه با کول‌داون ۳۰ ثانیه‌ای
+        if (now_sec - self.last_signal_time[symbol]) > 30.0:
+            # شرط ورود BUY: فقط در صورت ترند صعودی، قیمت بالای میانگین و فشار خرید قوی
+            if trend_bias > 0 and p_now >= ma_long and alpha_score >= 0.35 and live_ofi > 0.25:
                 self.last_signal_time[symbol] = now_sec
                 prob = round(0.75 + (alpha_score * 0.20), 4)
                 return {
@@ -149,8 +162,8 @@ class RealtimeScalpBridge:
                     "decayed_sentiment": round(decayed_sentiment, 2),
                     "timestamp": now.isoformat()
                 }
-
-            elif trend_bias < 0 and alpha_score <= -0.35 and live_ofi < -0.10:
+            # شرط ورود SELL: فقط در صورت ترند نزولی، قیمت زیر میانگین و فشار فروش قوی
+            elif trend_bias < 0 and p_now <= ma_long and alpha_score <= -0.35 and live_ofi < -0.25:
                 self.last_signal_time[symbol] = now_sec
                 prob = round(0.75 + (abs(alpha_score) * 0.20), 4)
                 return {
@@ -169,8 +182,7 @@ class RealtimeScalpBridge:
         pubsub = client.pubsub()
         await pubsub.subscribe("market:trades:btcusdt", "market:trades:ethusdt")
 
-        logger.info("High-Impact Scalp Alpha Engine ACTIVE...")
-        last_news_id = "$"
+        logger.info("Realtime Scalp Alpha Engine ACTIVE (Macro Trend & 60-Tick OFI)...")
 
         while True:
             msg = await pubsub.get_message(ignore_subscribe_messages=True, timeout=0.01)
@@ -185,9 +197,33 @@ class RealtimeScalpBridge:
                     signal = self.evaluate_live_market(symbol, price, vol, is_buyer_maker)
                     if signal:
                         await client.publish("market:scalp_signals", json.dumps(signal))
-                        logger.info(f"🎯 HIGH-REWARD SCALP ENTRY: {signal['symbol']} -> {signal['action']} ({signal['probability']*100:.1f}%)")
+                        logger.info(f"🎯 MAKER SCALP SIGNAL: {signal['symbol']} -> {signal['action']} ({signal['probability']*100:.1f}%)")
                 except Exception as e:
-                    logger.error(f"Error processing packet: {e}")
+                    logger.error(f"Error processing market message: {e}")
+
+            # فید اخبار
+            news_streams = await client.xread({"events:news_raw": "$"}, count=2, block=10)
+            if news_streams:
+                for _, messages in news_streams:
+                    for _, fields in messages:
+                        payload = json.loads(fields.get("payload", "{}"))
+                        title = payload.get("title", "").lower()
+                        
+                        bullish_words = ["surge", "jump", "record", "etf", "approval", "rally", "gain", "inflow", "sec approves"]
+                        bearish_words = ["crash", "drop", "hack", "lawsuit", "ban", "sec sues", "outflow", "plunge"]
+                        
+                        pos_count = sum(1 for w in bullish_words if w in title)
+                        neg_count = sum(1 for w in bearish_words if w in title)
+                        
+                        score = 0.0
+                        if pos_count > neg_count: score = min(0.3 * pos_count, 0.9)
+                        elif neg_count > pos_count: score = max(-0.3 * neg_count, -0.9)
+                        
+                        self.active_news.append({
+                            "ts": datetime.now(timezone.utc),
+                            "score": score,
+                            "title": payload.get("title", "")
+                        })
 
             await asyncio.sleep(0.001)
 
