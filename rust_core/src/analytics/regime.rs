@@ -1,6 +1,4 @@
-use rust_decimal::Decimal;
-use rust_decimal_macros::dec;
-
+// مسیر: rust_core/src/analytics/regime.rs
 #[derive(Debug, Clone, PartialEq)]
 pub enum MarketRegime {
     BullishTrend,
@@ -18,7 +16,6 @@ impl RegimeDetector {
         Self { volatility_threshold }
     }
 
-    /// تشخیص رژیم بازار بر اساس تغییرات قیمت و بازه نوسان (ATR / Returns)
     pub fn detect_regime(&self, returns: &[f64], current_spread_bps: f64) -> MarketRegime {
         if returns.is_empty() {
             return MarketRegime::LowVolatilityConsolidation;

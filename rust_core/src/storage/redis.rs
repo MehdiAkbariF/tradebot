@@ -1,11 +1,13 @@
+// مسیر: rust_core/src/storage/redis.rs
 use crate::domain::types::{OrderBookMetrics, TradeTick};
 use crate::error::Result;
 use redis::aio::ConnectionManager;
 use redis::AsyncCommands;
+use serde_json::Value;
 
 #[derive(Clone)]
 pub struct RedisPublisher {
-    conn: ConnectionManager,
+    pub conn: ConnectionManager,
 }
 
 impl RedisPublisher {
@@ -26,6 +28,12 @@ impl RedisPublisher {
         let payload = serde_json::to_string(metrics)?;
         let channel = format!("market:metrics:{}", metrics.symbol.to_lowercase());
         let _: () = self.conn.publish(channel, payload).await?;
+        Ok(())
+    }
+
+    pub async fn publish_json(&mut self, channel: &str, payload: &Value) -> Result<()> {
+        let payload_str = serde_json::to_string(payload)?;
+        let _: () = self.conn.publish(channel, payload_str).await?;
         Ok(())
     }
 }

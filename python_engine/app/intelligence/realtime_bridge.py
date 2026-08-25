@@ -1,31 +1,59 @@
+# مسیر: python_engine/app/intelligence/realtime_bridge.py
 import json
 import os
 import asyncio
 import numpy as np
+import pandas as pd
 import redis.asyncio as aioredis
-import lightgbm as lgb
 from datetime import datetime, timezone
 from collections import deque
 from loguru import logger
 
 REDIS_URL = "redis://127.0.0.1:6379"
 
-class RealtimeScalpBridge:
-    def __init__(self, model_path: str = "scalp_lightgbm_model.txt"):
-        self.model = None
-        if os.path.exists(model_path):
-            self.model = lgb.Booster(model_file=model_path)
-            logger.info(f"Loaded LightGBM Scalp Model from {model_path}")
-        else:
-            logger.warning(f"Model file {model_path} not found. Running with baseline rules.")
+class LocalCandleBuilder:
+    def __init__(self, max_candles=60):
+        self.candles = deque(maxlen=max_candles)
+        self.current_candle = None
+        self.current_minute = None
 
-        # بافرهای درون‌حافظه‌ای جهت محاسبه فیچرهای زنده بدون تاخیر
-        self.price_history = deque(maxlen=3600)   # ۱ ساعت گذشته (برای EMA 15m)
-        self.volume_history = deque(maxlen=3600)
-        self.active_news = deque(maxlen=50)       # اخبار ۱۰ دقیقه اخیر
+    def add_tick(self, price: float, vol: float, ts: datetime):
+        minute = ts.strftime("%Y-%m-%d %H:%M")
+        if self.current_minute != minute:
+            if self.current_candle:
+                self.candles.append(self.current_candle)
+            self.current_minute = minute
+            self.current_candle = {
+                "open": price, "high": price, "low": price, "close": price, "vol": vol
+            }
+        else:
+            self.current_candle["high"] = max(self.current_candle["high"], price)
+            self.current_candle["low"] = min(self.current_candle["low"], price)
+            self.current_candle["close"] = price
+            self.current_candle["vol"] += vol
+
+    def get_df(self) -> pd.DataFrame:
+        data = list(self.candles)
+        if self.current_candle:
+            data.append(self.current_candle)
+        if not data:
+            return pd.DataFrame()
+        return pd.DataFrame(data)
+
+class RealtimeScalpBridge:
+    def __init__(self):
+        self.price_history = {}
+        self.volume_history = {}
+        self.buy_vol_history = {}
+        self.sell_vol_history = {}
+        self.candle_builders = {
+            "BTCUSDT": LocalCandleBuilder(max_candles=60),
+            "ETHUSDT": LocalCandleBuilder(max_candles=60)
+        }
+        self.active_news = deque(maxlen=50)
         self.decay_lambda = 0.0069
-        self.cum_vol = 0.0
-        self.cum_vol_price = 0.0
+        self.last_signal_time = {}
+        self.last_heartbeat_time = 0.0
 
     def get_decayed_sentiment(self) -> float:
         now = datetime.now(timezone.utc)
@@ -37,111 +65,129 @@ class RealtimeScalpBridge:
                 total += n["score"] * decay
         return float(np.clip(total, -1.0, 1.0))
 
-    def compute_features(self, current_price: float, current_vol: float, ofi: float) -> list[float]:
-        self.price_history.append(current_price)
-        self.volume_history.append(current_vol)
+    def evaluate_live_market(self, symbol: str, price: float, vol: float, is_buyer_maker: bool) -> dict | None:
+        now = datetime.now(timezone.utc)
         
-        self.cum_vol += current_vol
-        self.cum_vol_price += (current_price * current_vol)
-        daily_vwap = self.cum_vol_price / self.cum_vol if self.cum_vol > 0 else current_price
+        builder = self.candle_builders.get(symbol)
+        if builder:
+            builder.add_tick(price, vol, now)
 
-        prices = list(self.price_history)
+        if symbol not in self.price_history:
+            self.price_history[symbol] = deque(maxlen=1000)
+            self.volume_history[symbol] = deque(maxlen=1000)
+            self.buy_vol_history[symbol] = deque(maxlen=1000)
+            self.sell_vol_history[symbol] = deque(maxlen=1000)
+            self.last_signal_time[symbol] = 0.0
+
+        hist_p = self.price_history[symbol]
+        hist_v = self.volume_history[symbol]
+        hist_bv = self.buy_vol_history[symbol]
+        hist_sv = self.sell_vol_history[symbol]
         
-        # ۱. بازده‌های ثانیه‌ای
+        hist_p.append(price)
+        hist_v.append(vol)
+
+        if not is_buyer_maker:
+            hist_bv.append(vol)
+            hist_sv.append(0.0)
+        else:
+            hist_bv.append(0.0)
+            hist_sv.append(vol)
+
+        if len(hist_p) < 30:
+            return None
+
+        prices = list(hist_p)
         p_now = prices[-1]
-        p_1s = prices[-2] if len(prices) >= 2 else p_now
-        p_5s = prices[-6] if len(prices) >= 6 else p_now
-        p_15s = prices[-16] if len(prices) >= 16 else p_now
+        p_5s = prices[-6] if len(prices) >= 6 else prices[0]
+        ret_5s = (p_now - p_5s) / p_5s if p_5s > 0 else 0.0
 
-        log_ret_1s = float(np.log(p_now / p_1s)) if p_1s > 0 else 0.0
-        log_ret_5s = float(np.log(p_now / p_5s)) if p_5s > 0 else 0.0
-        log_ret_15s = float(np.log(p_now / p_15s)) if p_15s > 0 else 0.0
+        # ۱. روندسنجی ۱ دقیقه‌ای
+        df_candles = builder.get_df() if builder else pd.DataFrame()
+        if len(df_candles) >= 3:
+            ema_fast = float(df_candles["close"].ewm(span=4, adjust=False).mean().iloc[-1])
+            ema_slow = float(df_candles["close"].ewm(span=12, adjust=False).mean().iloc[-1])
+            trend_bias = 1.0 if ema_fast >= ema_slow else -1.0
+        else:
+            series_p = pd.Series(prices)
+            trend_bias = 1.0 if float(series_p.ewm(span=30).mean().iloc[-1]) >= float(series_p.ewm(span=90).mean().iloc[-1]) else -1.0
 
-        # ۲. نوسان ۳۰ ثانیه اخیر
-        sub_30 = prices[-30:] if len(prices) >= 30 else prices
-        rets_30 = np.diff(np.log(sub_30)) if len(sub_30) > 1 else [0.0]
-        realized_vol_30s = float(np.std(rets_30)) if len(rets_30) > 1 else 0.0001
+        trend_str = "BULLISH 🟢" if trend_bias > 0 else "BEARISH 🔴"
 
-        # ۳. روند ۱۵ دقیقه‌ای
-        ema_fast = float(pd.Series(prices).ewm(span=900).mean().iloc[-1])
-        ema_slow = float(pd.Series(prices).ewm(span=3600).mean().iloc[-1])
-        trend_15m_bias = 1.0 if ema_fast > ema_slow else -1.0
+        # ۲. عدم تعادل بوک (OFI)
+        b_vol = sum(list(hist_bv)[-25:])
+        s_vol = sum(list(hist_sv)[-25:])
+        tot_vol = b_vol + s_vol
+        live_ofi = float((b_vol - s_vol) / tot_vol) if tot_vol > 0 else 0.0
 
-        # ۴. فاصله از VWAP
-        dist_to_vwap_bps = ((p_now - daily_vwap) / daily_vwap) * 10000.0
-
-        # ۵. جهش حجم
-        vol_list = list(self.volume_history)[-60:]
-        mean_vol = float(np.mean(vol_list)) if vol_list else 1.0
-        volume_surge = current_vol / mean_vol if mean_vol > 0 else 1.0
-
-        # ۶. سنتیمنت لحظه‌ای خبر
         decayed_sentiment = self.get_decayed_sentiment()
+        now_sec = now.timestamp()
 
-        return [
-            log_ret_1s, log_ret_5s, log_ret_15s,
-            realized_vol_30s, trend_15m_bias,
-            dist_to_vwap_bps, volume_surge, ofi,
-            decayed_sentiment
-        ]
+        # فرمول آلفا با تمرکز روی ورودهای پرقدرت
+        alpha_score = (trend_bias * 0.45) + (live_ofi * 0.35) + (np.clip(ret_5s * 2500.0, -0.20, 0.20)) + (decayed_sentiment * 0.15)
+
+        if (now_sec - self.last_heartbeat_time) > 5.0:
+            self.last_heartbeat_time = now_sec
+            logger.info(
+                f"📊 LIVE SCAN: {symbol} = ${p_now:,.2f} | "
+                f"Trend: {trend_str} | "
+                f"OFI: {live_ofi:+.2f} | "
+                f"Alpha: {alpha_score:+.2f} | "
+                f"Ret5s: {ret_5s*100:+.3f}%"
+            )
+
+        # ۳. صدور سیگنال تک‌تیرانداز با وقفه ۲۵ ثانیه برای ثبت سودهای سنگین
+        if (now_sec - self.last_signal_time[symbol]) > 25.0:
+            if trend_bias > 0 and alpha_score >= 0.35 and live_ofi > 0.10:
+                self.last_signal_time[symbol] = now_sec
+                prob = round(0.75 + (alpha_score * 0.20), 4)
+                return {
+                    "symbol": symbol,
+                    "action": "BUY",
+                    "probability": prob,
+                    "trend_bias": 1.0,
+                    "decayed_sentiment": round(decayed_sentiment, 2),
+                    "timestamp": now.isoformat()
+                }
+
+            elif trend_bias < 0 and alpha_score <= -0.35 and live_ofi < -0.10:
+                self.last_signal_time[symbol] = now_sec
+                prob = round(0.75 + (abs(alpha_score) * 0.20), 4)
+                return {
+                    "symbol": symbol,
+                    "action": "SELL",
+                    "probability": prob,
+                    "trend_bias": -1.0,
+                    "decayed_sentiment": round(decayed_sentiment, 2),
+                    "timestamp": now.isoformat()
+                }
+
+        return None
 
     async def run(self):
         client = aioredis.from_url(REDIS_URL, decode_responses=True)
         pubsub = client.pubsub()
-        await pubsub.subscribe("market:trades:btcusdt", "market:metrics:btcusdt")
+        await pubsub.subscribe("market:trades:btcusdt", "market:trades:ethusdt")
 
-        logger.info("Realtime Scalp Inference Engine listening to market data & news streams...")
-        last_news_id = "0-0"
+        logger.info("High-Impact Scalp Alpha Engine ACTIVE...")
+        last_news_id = "$"
 
         while True:
-            # ۱. خواندن تیک‌ها و معیارهای اردربوک از Redis
             msg = await pubsub.get_message(ignore_subscribe_messages=True, timeout=0.01)
             if msg:
-                channel = msg["channel"]
                 try:
                     data = json.loads(msg["data"])
-                    if "trades" in channel:
-                        price = float(data.get("price", 0.0))
-                        vol = float(data.get("quantity", 0.0))
-                        ofi = 0.0  # مقدار تیک پیش‌فرض
-                        features = self.compute_features(price, vol, ofi)
-                        
-                        if self.model:
-                            prob_up = float(self.model.predict([features])[0])
-                            
-                            # اگر مدل احتمال بالاتر از ۶۵٪ برای رشد در ۴۵ ثانیه آینده داد
-                            if prob_up >= 0.65:
-                                signal = {
-                                    "symbol": "BTCUSDT",
-                                    "action": "BUY",
-                                    "probability": round(prob_up, 4),
-                                    "trend_bias": features[4],
-                                    "decayed_sentiment": features[8],
-                                    "timestamp": datetime.now(timezone.utc).isoformat()
-                                }
-                                await client.publish("market:scalp_signals", json.dumps(signal))
-                                logger.info(f"⚡ HIGH CONVICTION SCALP SIGNAL: {signal}")
+                    symbol = data.get("symbol", "").upper()
+                    price = float(data.get("price", 0.0))
+                    vol = float(data.get("quantity", 0.0))
+                    is_buyer_maker = bool(data.get("is_buyer_maker", False))
+                    
+                    signal = self.evaluate_live_market(symbol, price, vol, is_buyer_maker)
+                    if signal:
+                        await client.publish("market:scalp_signals", json.dumps(signal))
+                        logger.info(f"🎯 HIGH-REWARD SCALP ENTRY: {signal['symbol']} -> {signal['action']} ({signal['probability']*100:.1f}%)")
                 except Exception as e:
-                    logger.error(f"Error processing market message: {e}")
-
-            # ۲. خواندن غیرهمگام اخبار از Redis Stream و ثبت در بافر سنتیمنت
-            news_streams = await client.xread({"events:news_raw": last_news_id}, count=2, block=10)
-            if news_streams:
-                for _, messages in news_streams:
-                    for msg_id, fields in messages:
-                        last_news_id = msg_id
-                        payload = json.loads(fields.get("payload", "{}"))
-                        title = payload.get("title", "")
-                        
-                        # ارزیابی سریع سنتیمنت خبر (مثبت/منفی)
-                        score = 0.8 if any(w in title.lower() for w in ["approve", "bull", "surge", "etf", "record"]) else -0.8 if any(w in title.lower() for w in ["ban", "hack", "drop", "sec", "lawsuit"]) else 0.0
-                        
-                        self.active_news.append({
-                            "ts": datetime.now(timezone.utc),
-                            "score": score,
-                            "title": title
-                        })
-                        logger.info(f"📰 Ingested Real-Time News Event | Score: {score} | Title: {title[:45]}")
+                    logger.error(f"Error processing packet: {e}")
 
             await asyncio.sleep(0.001)
 

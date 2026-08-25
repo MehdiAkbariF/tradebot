@@ -3,11 +3,11 @@ version=v4
 num_class=1
 num_tree_per_iteration=1
 label_index=0
-max_feature_idx=4
+max_feature_idx=8
 objective=binary sigmoid:1
-feature_names=returns_1s returns_10s rolling_volatility_30s volume_ma_30s ofi
-feature_infos=[-9.5688314723840762e-05:8.3828010385422758e-05] [-0.00026059379489096202:0.00028279099951955544] [1.3084964393997363e-05:3.421542035850086e-05] [1.5524329682997886:3.3672770335716589] [-0.99939439412163589:0.9996103619190031]
-tree_sizes=243
+feature_names=log_ret_1s log_ret_5s log_ret_15s realized_vol_30s trend_15m_bias dist_to_vwap_bps volume_surge ofi decayed_sentiment
+feature_infos=[-8.3457864318133975e-05:9.8481947992895821e-05] [-0.00021640963871034021:0.00019696270939846731] [-0.00041391273952237146:0.00032838011455691449] [0:3.5231228764639734e-05] [-1:1] [-9.438296648669299:39.970969183211011] [0.050298791477258221:10.39613383265883] [-0.99999003194913438:0.99998113814251144] [-0.5:0.80000000000000004]
+tree_sizes=244
 
 Tree=0
 num_leaves=1
@@ -20,7 +20,7 @@ left_child=
 right_child=
 leaf_value=-34.538776391283193
 leaf_weight=
-leaf_count=7976
+leaf_count=15964
 internal_value=
 internal_weight=
 internal_count=
@@ -35,22 +35,22 @@ feature_importances:
 parameters:
 [boosting: gbdt]
 [objective: binary]
-[metric: binary_logloss]
+[metric: auc,binary_logloss]
 [tree_learner: serial]
 [device_type: cpu]
 [data_sample_strategy: bagging]
 [data: ]
 [valid: ]
-[num_iterations: 200]
-[learning_rate: 0.05]
+[num_iterations: 400]
+[learning_rate: 0.03]
 [num_leaves: 31]
-[num_threads: 0]
+[num_threads: -1]
 [seed: 0]
 [deterministic: 0]
 [force_col_wise: 0]
 [force_row_wise: 0]
 [histogram_pool_size: -1]
-[max_depth: -1]
+[max_depth: 6]
 [min_data_in_leaf: 20]
 [min_sum_hessian_in_leaf: 0.001]
 [bagging_fraction: 1]
@@ -59,7 +59,7 @@ parameters:
 [bagging_freq: 0]
 [bagging_seed: 3]
 [bagging_by_query: 0]
-[feature_fraction: 1]
+[feature_fraction: 0.8]
 [feature_fraction_bynode: 1]
 [feature_fraction_seed: 2]
 [extra_trees: 0]

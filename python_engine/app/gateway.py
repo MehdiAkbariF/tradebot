@@ -5,8 +5,9 @@ import redis.asyncio as aioredis
 import json
 import asyncio
 from loguru import logger
+from starlette.websockets import WebSocketState
 
-app = FastAPI(title="MI-EDTE Live Scalping & AI Gateway", version="1.0.0")
+app = FastAPI(title="MI-EDTE Live Scalping & AI Gateway", version="1.2.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -30,21 +31,41 @@ async def live_terminal_websocket(websocket: WebSocket):
     client = aioredis.from_url(REDIS_URL, decode_responses=True)
     pubsub = client.pubsub()
     
-    # سابسکرایب به تمامی کانال‌های ترید، متریک، سیگنال اسکلپ و تغییرات پوزیشن
     await pubsub.subscribe(
         "market:trades:btcusdt",
-        "market:metrics:btcusdt",
+        "market:trades:ethusdt",
         "market:scalp_signals",
         "market:positions"
     )
 
-    last_news_id = "$"  # فقط اخبار جدید پس از اتصال
+    # ارسال ۱۰ خبر اخیر به محض اتصال
+    try:
+        past_news = await client.xrevrange("events:news_raw", "+", "-", count=10)
+        for _, fields in reversed(past_news):
+            payload_str = fields.get("payload", "{}")
+            try:
+                news_payload = json.loads(payload_str)
+            except Exception:
+                news_payload = {"raw": payload_str}
+
+            if websocket.client_state == WebSocketState.CONNECTED:
+                await websocket.send_json({
+                    "channel": "events:news_raw",
+                    "data": news_payload
+                })
+    except Exception as e:
+        logger.warning(f"Error fetching initial news history: {e}")
+
+    last_news_id = "$"
 
     try:
         while True:
-            # ۱. خواندن رویدادهای زنده Pub/Sub
-            message = await pubsub.get_message(ignore_subscribe_messages=True, timeout=0.05)
-            if message:
+            if websocket.client_state != WebSocketState.CONNECTED:
+                break
+
+            # دریافت پیام‌های زنده
+            message = await pubsub.get_message(ignore_subscribe_messages=True, timeout=0.02)
+            if message and websocket.client_state == WebSocketState.CONNECTED:
                 channel = message["channel"]
                 raw_text = message["data"]
                 try:
@@ -54,9 +75,9 @@ async def live_terminal_websocket(websocket: WebSocket):
 
                 await websocket.send_json({"channel": channel, "data": raw_data})
 
-            # ۲. خواندن استریم اخبار پردازش‌شده از Redis Stream
-            streams = await client.xread({"events:news_raw": last_news_id}, count=5, block=20)
-            if streams:
+            # دریافت استریم اخبار
+            streams = await client.xread({"events:news_raw": last_news_id}, count=3, block=10)
+            if streams and websocket.client_state == WebSocketState.CONNECTED:
                 for _, messages in streams:
                     for msg_id, fields in messages:
                         last_news_id = msg_id
@@ -72,8 +93,8 @@ async def live_terminal_websocket(websocket: WebSocket):
                         })
 
             await asyncio.sleep(0.005)
-    except WebSocketDisconnect:
-        logger.warning("Dashboard client disconnected.")
+    except (WebSocketDisconnect, RuntimeError):
+        logger.info("Dashboard client disconnected cleanly.")
     except Exception as e:
         logger.error(f"WebSocket gateway error: {e}")
     finally:

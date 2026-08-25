@@ -27,7 +27,7 @@ export interface NewsItem {
 
 export interface PositionUpdate {
   symbol: string;
-  action: string; // 'OPEN' | 'CLOSE'
+  action: string;
   entry_price: number;
   exit_price?: number;
   pnl?: number;
@@ -36,7 +36,7 @@ export interface PositionUpdate {
 
 export function useLiveTerminal() {
   const [isConnected, setIsConnected] = useState(false);
-  const [lastTick, setLastTick] = useState<TradeTick | null>(null);
+  const [ticks, setTicks] = useState<Record<string, TradeTick>>({});
   const [signals, setSignals] = useState<ScalpSignal[]>([]);
   const [news, setNews] = useState<NewsItem[]>([]);
   const [positions, setPositions] = useState<PositionUpdate[]>([]);
@@ -57,8 +57,9 @@ export function useLiveTerminal() {
         const parsed = JSON.parse(event.data);
         const { channel, data } = parsed;
 
-        if (channel === 'market:trades:btcusdt') {
-          setLastTick(data);
+        if (channel.startsWith('market:trades:')) {
+          const sym = data.symbol.toUpperCase();
+          setTicks((prev) => ({ ...prev, [sym]: data }));
         } else if (channel === 'market:scalp_signals') {
           setSignals((prev) => [data, ...prev.slice(0, 14)]);
         } else if (channel === 'events:news_raw') {
@@ -67,10 +68,10 @@ export function useLiveTerminal() {
             id: payload.id || Math.random().toString(),
             title: payload.title || 'Market Update',
             url: payload.url,
-            source_id: payload.source_id || 'RSS Source',
+            source_id: payload.source_id || 'Crypto Feed',
             time: new Date().toLocaleTimeString(),
           };
-          setNews((prev) => [newItem, ...prev.slice(0, 9)]);
+          setNews((prev) => [newItem, ...prev.filter(n => n.title !== newItem.title).slice(0, 9)]);
         } else if (channel === 'market:positions') {
           setPositions((prev) => [data, ...prev.slice(0, 9)]);
           if (data.pnl) {
@@ -79,7 +80,7 @@ export function useLiveTerminal() {
           }
         }
       } catch (err) {
-        console.error('Error parsing gateway WS packet', err);
+        console.error('Error parsing WS packet', err);
       }
     };
 
@@ -90,7 +91,7 @@ export function useLiveTerminal() {
 
   return {
     isConnected,
-    lastTick,
+    ticks,
     signals,
     news,
     positions,

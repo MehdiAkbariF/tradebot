@@ -12,14 +12,14 @@ export default function DashboardPage() {
 
   return (
     <main className="min-h-screen bg-slate-950 flex flex-col font-sans">
-      <Header isConnected={terminal.isConnected} />
+      <Header />
       <div className="p-6 grid grid-cols-1 md:grid-cols-2 gap-6 max-w-7xl mx-auto w-full flex-1">
         <MarketView 
-          lastTick={terminal.lastTick} 
+          ticks={terminal.ticks} 
           isConnected={terminal.isConnected}
           cashBalance={terminal.cashBalance}
         />
-        <NewsFeed newsList={terminal.news} isConnected={terminal.isConnected} />
+        <NewsFeed newsList={terminal.news} />
         <SignalsView 
           signals={terminal.signals} 
           cashBalance={terminal.cashBalance} 

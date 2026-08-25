@@ -1,4 +1,4 @@
-use super::normalizer::BinanceNormalizer; // ماژول نرمال‌ساز قابل استفاده مجدد
+// مسیر: rust_core/src/market_data/binance.rs
 use crate::config::MarketDataSettings;
 use crate::domain::types::{DepthDelta, TradeTick};
 use crate::error::{AppError, Result};
@@ -28,31 +28,26 @@ impl BinanceClient {
     pub fn new(settings: MarketDataSettings, event_tx: mpsc::Sender<MarketEvent>) -> Self {
         Self {
             settings,
-            http_client: HttpClient::new(),
+            http_client: HttpClient::builder().timeout(Duration::from_secs(4)).build().unwrap_or_default(),
             event_tx,
         }
     }
-pub async fn fetch_snapshot(&self, symbol: &str) -> Result<(u64, Vec<(rust_decimal::Decimal, rust_decimal::Decimal)>, Vec<(rust_decimal::Decimal, rust_decimal::Decimal)>)> {
-        // Bybit Spot Orderbook REST API endpoint
+
+    pub async fn fetch_snapshot(&self, symbol: &str) -> Result<(u64, Vec<(rust_decimal::Decimal, rust_decimal::Decimal)>, Vec<(rust_decimal::Decimal, rust_decimal::Decimal)>)> {
         let url = format!("{}/v5/market/orderbook?category=spot&symbol={}&limit=50", self.settings.binance_rest_url, symbol.to_uppercase());
         let res = self.http_client.get(&url).send().await?.json::<Value>().await?;
 
         let result_obj = &res["result"];
         let ts = result_obj["ts"].as_u64().unwrap_or(0);
 
-        let bids_raw = &result_obj["b"];
-        let asks_raw = &result_obj["a"];
-
-        let bids = BinanceNormalizer::parse_levels(bids_raw)?;
-        let asks = BinanceNormalizer::parse_levels(asks_raw)?;
+        let bids = parse_bybit_levels(&result_obj["b"])?;
+        let asks = parse_bybit_levels(&result_obj["a"])?;
 
         Ok((ts, bids, asks))
     }
 
     pub async fn run_stream(&self) {
-        // Bybit Spot Public WebSocket Endpoint
-        let ws_url = "wss://stream.bybit.com/v5/public/spot";
-
+        let ws_url = &self.settings.binance_ws_url;
         let mut topics = Vec::new();
         for s in &self.settings.symbols {
             let sym = s.to_uppercase();
@@ -66,14 +61,13 @@ pub async fn fetch_snapshot(&self, symbol: &str) -> Result<(u64, Vec<(rust_decim
                 Ok((mut ws_stream, _)) => {
                     info!("Successfully connected to Bybit WebSocket.");
 
-                    // Subscribe to topics
                     let sub_msg = json!({
                         "op": "subscribe",
                         "args": topics
                     }).to_string();
 
                     if let Err(e) = ws_stream.send(Message::Text(sub_msg)).await {
-                        error!("Failed to send subscription message: {}", e);
+                        error!("Failed to send subscription: {}", e);
                         continue;
                     }
 
@@ -86,14 +80,12 @@ pub async fn fetch_snapshot(&self, symbol: &str) -> Result<(u64, Vec<(rust_decim
                                         if topic.starts_with("publicTrade") {
                                             if let Some(data_arr) = val.get("data").and_then(|d| d.as_array()) {
                                                 for item in data_arr {
-                                                    // نرمال‌سازی ترید بای‌بیت
                                                     if let Ok(trade) = parse_bybit_trade(item, received_ts) {
                                                         let _ = self.event_tx.send(MarketEvent::Trade(trade)).await;
                                                     }
                                                 }
                                             }
                                         } else if topic.starts_with("orderbook") {
-                                            // پردازش دلتا/اسنپ‌شات اردر بوک بای‌بیت
                                             if let Ok(delta) = parse_bybit_depth(&val, received_ts) {
                                                 let _ = self.event_tx.send(MarketEvent::Depth(delta)).await;
                                             }
@@ -105,7 +97,7 @@ pub async fn fetch_snapshot(&self, symbol: &str) -> Result<(u64, Vec<(rust_decim
                                 let _ = ws_stream.send(Message::Pong(p)).await;
                             }
                             Ok(Message::Close(_)) => {
-                                warn!("Bybit server sent close frame. Reconnecting...");
+                                warn!("WebSocket server closed connection. Reconnecting...");
                                 break;
                             }
                             Err(e) => {
@@ -117,7 +109,7 @@ pub async fn fetch_snapshot(&self, symbol: &str) -> Result<(u64, Vec<(rust_decim
                     }
                 }
                 Err(e) => {
-                    error!("Bybit WebSocket connection failed: {}. Retrying in {}ms...", e, self.settings.reconnect_interval_ms);
+                    error!("WebSocket connection failed: {}. Retrying...", e);
                 }
             }
             sleep(Duration::from_millis(self.settings.reconnect_interval_ms)).await;
@@ -125,20 +117,26 @@ pub async fn fetch_snapshot(&self, symbol: &str) -> Result<(u64, Vec<(rust_decim
     }
 }
 
-// توابع کمکی پارس کردن ساختار داده‌های Bybit
+fn parse_bybit_levels(val: &Value) -> Result<Vec<(rust_decimal::Decimal, rust_decimal::Decimal)>> {
+    let mut levels = Vec::new();
+    if let Some(arr) = val.as_array() {
+        for item in arr {
+            if let (Some(p_str), Some(q_str)) = (item[0].as_str(), item[1].as_str()) {
+                if let (Ok(p), Ok(q)) = (p_str.parse(), q_str.parse()) {
+                    levels.push((p, q));
+                }
+            }
+        }
+    }
+    Ok(levels)
+}
+
 fn parse_bybit_trade(val: &Value, received_ts: chrono::DateTime<Utc>) -> Result<TradeTick> {
-    let symbol = val["s"].as_str().unwrap_or("UNKNOWN").to_string();
-    let price_str = val["p"].as_str().unwrap_or("0");
-    let price = rust_decimal::Decimal::from_str_exact(price_str).unwrap_or_default();
-    
-    let qty_str = val["v"].as_str().unwrap_or("0");
-    let quantity = rust_decimal::Decimal::from_str_exact(qty_str).unwrap_or_default();
-    
+    let symbol = val["s"].as_str().unwrap_or("BTCUSDT").to_string();
+    let price = val["p"].as_str().and_then(|p| p.parse().ok()).unwrap_or_default();
+    let quantity = val["v"].as_str().and_then(|v| v.parse().ok()).unwrap_or_default();
     let side = val["S"].as_str().unwrap_or("");
-    let is_buyer_maker = side == "Sell"; // در بای‌بیت تیک سل یعنی خریدار میکر بوده
-    
-    let ts_millis = val["T"].as_i64().unwrap_or(received_ts.timestamp_millis());
-    let exchange_ts = chrono::TimeZone::timestamp_millis_opt(&Utc, ts_millis).single().unwrap_or(received_ts);
+    let is_buyer_maker = side == "Sell";
 
     Ok(TradeTick {
         symbol,
@@ -146,21 +144,18 @@ fn parse_bybit_trade(val: &Value, received_ts: chrono::DateTime<Utc>) -> Result<
         price,
         quantity,
         is_buyer_maker,
-        exchange_ts,
+        exchange_ts: received_ts,
         received_ts,
     })
 }
 
 fn parse_bybit_depth(val: &Value, received_ts: chrono::DateTime<Utc>) -> Result<DepthDelta> {
-    let symbol = val["s"].as_str().unwrap_or("UNKNOWN").to_string();
+    let symbol = val["s"].as_str().unwrap_or("BTCUSDT").to_string();
     let data = &val["data"];
-    
     let update_id = data["u"].as_u64().unwrap_or(0);
-    let ts_millis = val["ts"].as_i64().unwrap_or(received_ts.timestamp_millis());
-    let exchange_ts = chrono::TimeZone::timestamp_millis_opt(&Utc, ts_millis).single().unwrap_or(received_ts);
 
-    let bids = BinanceNormalizer::parse_levels(&data["b"])?;
-    let asks = BinanceNormalizer::parse_levels(&data["a"])?;
+    let bids = parse_bybit_levels(&data["b"])?;
+    let asks = parse_bybit_levels(&data["a"])?;
 
     Ok(DepthDelta {
         symbol,
@@ -168,7 +163,7 @@ fn parse_bybit_depth(val: &Value, received_ts: chrono::DateTime<Utc>) -> Result<
         final_update_id: update_id,
         bids,
         asks,
-        exchange_ts,
+        exchange_ts: received_ts,
         received_ts,
     })
 }
