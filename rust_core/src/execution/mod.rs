@@ -6,7 +6,7 @@ use rust_decimal::Decimal;
 use rust_decimal_macros::dec;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use tracing::info;
+use tracing::{info, warn};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PendingMakerOrder {
@@ -54,15 +54,26 @@ pub struct ClosedTradeRecord {
     pub closed_at: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DynamicRiskConfig {
+    pub total_capital: Decimal,
+    pub allocation_pct: Decimal, // مثلاً 0.30 معادل 30 درصد
+    pub leverage: Decimal,       // مثلاً 1x برای اسپات و 5x برای فیوچرز
+    pub min_notional_guard: Decimal, // حداقل اردر مجاز صرافی (5 دلار)
+    pub kill_switch: bool,
+}
+
 pub struct HighFrequencyScalpExecutor {
     positions: HashMap<String, ScalpPosition>,
     pending_orders: HashMap<String, PendingMakerOrder>,
-    cash_balance: Decimal,
-    total_margin_in_use: Decimal,
+    pub risk_config: DynamicRiskConfig,
+    pub cash_balance: Decimal,
+    pub total_margin_in_use: Decimal,
     maker_fee_ratio: Decimal,
     tp_ratio: Decimal,
     sl_ratio: Decimal,
     breakeven_ratio: Decimal,
+    early_harvest_ratio: Decimal,
     max_holding_sec: i64,
     max_spread_bps: f64,
     maker_timeout_sec: i64,
@@ -70,34 +81,83 @@ pub struct HighFrequencyScalpExecutor {
 
 impl HighFrequencyScalpExecutor {
     pub fn new(config: &TradingSettings) -> Self {
+        let initial_cap = config.initial_capital;
         Self {
             positions: HashMap::new(),
             pending_orders: HashMap::new(),
-            cash_balance: config.initial_capital,
+            risk_config: DynamicRiskConfig {
+                total_capital: initial_cap,
+                allocation_pct: dec!(0.30), // تخصیص 30 درصد سرمایه در هر معامله
+                leverage: dec!(1.0),
+                min_notional_guard: dec!(5.0), // حداقل اردر 5 دلار برای صرافی
+                kill_switch: false,
+            },
+            cash_balance: initial_cap,
             total_margin_in_use: dec!(0.0),
             maker_fee_ratio: Decimal::from_f64_retain(config.maker_fee_bps / 10000.0).unwrap_or(dec!(0.0001)),
-            // تارگت سود ۱۸ پیپ (0.0018) معادل حدود ۱۴۵ دلار روی بیت‌کوین
-            tp_ratio: dec!(0.0018),
-            // حد ضرر ۱۴ پیپ (0.0014) معادل حدود ۱۱۰ دلار روی بیت‌کوین (کاملاً خارج از نویز تصادفی)
-            sl_ratio: dec!(0.0014),
-            // انتقال به بریک‌ایون پس از ۸ پیپ سود
-            breakeven_ratio: dec!(0.0008),
-            // مهلت باز بودن پوزیشن ۵ دقیقه
+            tp_ratio: dec!(0.0018),            // 18 bps حد سود
+            sl_ratio: dec!(0.0014),            // 14 bps حد ضرر
+            breakeven_ratio: dec!(0.0008),     // 8 bps فعال شدن بریک‌ایون
+            early_harvest_ratio: dec!(0.0006), // 6 bps سیو سود سریع
             max_holding_sec: 300,
             max_spread_bps: config.max_spread_bps,
             maker_timeout_sec: config.maker_timeout_seconds,
         }
     }
 
-    /// کاشت سفارش لیمیت میکر در بهترین قیمت دفتر سفارشات
+    /// به‌روزرسانی داینامیک تنظیمات سرمایه و ریسک بدون ری‌استارت ربات
+    pub fn update_risk_config(&mut self, new_cap: Option<Decimal>, alloc_pct: Option<Decimal>, lev: Option<Decimal>, kill: Option<bool>) {
+        if let Some(c) = new_cap {
+            self.risk_config.total_capital = c;
+            self.cash_balance = c;
+            info!(capital = %c, "💵 Capital Balance Updated");
+        }
+        if let Some(a) = alloc_pct {
+            self.risk_config.allocation_pct = a;
+            info!(allocation = %a, "⚖️ Allocation % Updated");
+        }
+        if let Some(l) = lev {
+            self.risk_config.leverage = l;
+            info!(leverage = %l, "⚡ Leverage Updated");
+        }
+        if let Some(k) = kill {
+            self.risk_config.kill_switch = k;
+            if k {
+                warn!("🚨 EMERGENCY KILL-SWITCH ACTIVATED!");
+            }
+        }
+    }
+
+    /// محاسبه خودکار و داینامیک حجم معامله بر اساس سرمایه لحظه‌ای
+    pub fn calculate_dynamic_notional(&self) -> Option<Decimal> {
+        if self.risk_config.kill_switch {
+            return None;
+        }
+
+        let base_equity = self.cash_balance;
+        let notional = (base_equity * self.risk_config.allocation_pct * self.risk_config.leverage).round_dp(2);
+
+        // گارد محافظتی صرافی: اگر کمتر از 5 دلار باشد معامله لغو می‌شود
+        if notional < self.risk_config.min_notional_guard {
+            warn!(
+                calculated = %notional,
+                min_required = %self.risk_config.min_notional_guard,
+                "⚠️ Trade rejected: Calculated size is below Exchange Min Notional"
+            );
+            return None;
+        }
+
+        Some(notional)
+    }
+
+    /// کاشت سفارش لیمیت با حجم کاملاً داینامیک
     pub fn place_maker_order(
         &mut self,
         symbol: &str,
         is_buy: bool,
-        size: Decimal,
         metrics: &OrderBookMetrics,
     ) -> Option<PendingMakerOrder> {
-        if metrics.spread_bps > self.max_spread_bps {
+        if metrics.spread_bps > self.max_spread_bps || self.risk_config.kill_switch {
             return None;
         }
 
@@ -110,12 +170,14 @@ impl HighFrequencyScalpExecutor {
             return None;
         }
 
+        let notional = self.calculate_dynamic_notional()?;
         let limit_price = (if is_buy { metrics.best_bid } else { metrics.best_ask }).round_dp(2);
         if limit_price <= dec!(0.0) {
             return None;
         }
 
-        let notional = limit_price * size;
+        let size = (notional / limit_price).round_dp(4);
+
         let order = PendingMakerOrder {
             id: uuid::Uuid::new_v4().to_string(),
             symbol: symbol.to_string(),
@@ -128,11 +190,17 @@ impl HighFrequencyScalpExecutor {
         };
 
         self.pending_orders.insert(symbol.to_string(), order.clone());
-        info!(symbol = %symbol, side = if is_buy { "BUY" } else { "SELL" }, price = %limit_price, "📥 Maker Limit Order PLACED (0.01% Fee Tier)");
+        info!(
+            symbol = %symbol,
+            side = if is_buy { "BUY" } else { "SELL" },
+            price = %limit_price,
+            notional = %notional,
+            "📥 Dynamic Maker Order PLACED"
+        );
         Some(order)
     }
 
-    /// بررسی پر شدن اردر و محاسبه دقیق سطوح قیمتی حد سود و ضرر
+    /// بررسی پر شدن اردر و فعال‌سازی تارگت‌های درصدی
     pub fn process_pending_orders_and_fills(&mut self, symbol: &str, trade_price: Decimal) -> Option<ScalpPosition> {
         let order = self.pending_orders.get(symbol)?.clone();
         let now = Utc::now();
@@ -185,7 +253,8 @@ impl HighFrequencyScalpExecutor {
                 entry = %order.limit_price,
                 tp = %tp_price,
                 sl = %sl_price,
-                "⚡ Maker Order FILLED! Tracking Scalp Targets..."
+                notional = %order.notional,
+                "⚡ Scalp Position FILLED"
             );
             return Some(position);
         }
@@ -198,7 +267,7 @@ impl HighFrequencyScalpExecutor {
         None
     }
 
-    /// ارزیابی خروج با سود و مدیریت حد ضرر متحرک (Trailing / Breakeven)
+    /// ارزیابی خروج با سود و مدیریت درصدی برداشت سود
     pub fn evaluate_open_positions(
         &mut self,
         symbol: &str,
@@ -218,7 +287,7 @@ impl HighFrequencyScalpExecutor {
             return None;
         }
 
-        // ۱. قفل کردن ریسک در نقطه سر‌به‌سر پس از ۸ پیپ سود اولیه
+        // ۱. قفل کردن ریسک در نقطه ورود پس از 8 پیپ سود
         if position.is_buy && mark_price >= position.entry_price * (dec!(1.0) + self.breakeven_ratio) && !position.is_breakeven_active {
             position.stop_loss_price = (position.entry_price + (position.entry_price * self.maker_fee_ratio * dec!(2))).round_dp(2);
             position.is_breakeven_active = true;
@@ -233,7 +302,9 @@ impl HighFrequencyScalpExecutor {
         let hit_sl = if position.is_buy { mark_price <= position.stop_loss_price } else { mark_price >= position.stop_loss_price };
         
         let notional_current = mark_price * position.quantity.abs();
+        let notional_entry = position.entry_price * position.quantity.abs();
         let exit_fee = notional_current * self.maker_fee_ratio;
+        
         let current_raw_pnl = if position.is_buy {
             (mark_price - position.entry_price) * position.quantity.abs()
         } else {
@@ -241,13 +312,13 @@ impl HighFrequencyScalpExecutor {
         };
         let current_net_pnl = current_raw_pnl - exit_fee;
 
-        // سیو سود زودهنگام فقط در صورت کسب سود خالص بالای ۸ دلار بعد از ۱۵ ثانیه
-        let early_profit_take = hold_duration >= 15 && current_net_pnl >= dec!(8.0);
+        // سیو سود داینامیک: اگر بعد از 15 ثانیه، سود خالص بالای 0.06% از حجم معامله بود
+        let dynamic_profit_harvest_target = notional_entry * self.early_harvest_ratio;
+        let early_profit_take = hold_duration >= 15 && current_net_pnl >= dynamic_profit_harvest_target;
         let hit_time = hold_duration >= position.max_holding_sec;
 
         if hit_tp || hit_sl || early_profit_take || hit_time {
-            let net_pnl = (current_raw_pnl - exit_fee).round_dp(2);
-            let notional_entry = position.entry_price * position.quantity.abs();
+            let net_pnl = current_net_pnl.round_dp(2);
             let pnl_pct = if notional_entry > dec!(0.0) {
                 let ratio = net_pnl / notional_entry;
                 ratio.to_string().parse::<f64>().unwrap_or(0.0) * 100.0
@@ -256,7 +327,7 @@ impl HighFrequencyScalpExecutor {
             };
 
             position.is_open = false;
-            self.total_margin_in_use -= position.entry_price * position.quantity.abs();
+            self.total_margin_in_use -= notional_entry;
             self.cash_balance += notional_current + net_pnl;
 
             let total_round_trip_fee = (exit_fee + (notional_entry * self.maker_fee_ratio)).round_dp(2);
@@ -293,7 +364,7 @@ impl HighFrequencyScalpExecutor {
                 reason = %reason,
                 pnl = %net_pnl,
                 held_sec = %hold_duration,
-                "💰 Trade CLOSED (Fee: ${})", total_round_trip_fee
+                "💰 Scalp CLOSED (PnL: ${})", net_pnl
             );
 
             return Some(record);

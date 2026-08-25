@@ -19,7 +19,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let subscriber = FmtSubscriber::builder().with_max_level(Level::INFO).finish();
     tracing::subscriber::set_global_default(subscriber)?;
 
-    info!("Starting MI-EDTE Passive Maker & Volatility-Gated Scalp Engine...");
+    info!("Starting MI-EDTE Dynamic Scalping & Risk Core...");
 
     let settings = Settings::new()?;
     let mut redis_pub = RedisPublisher::new(&settings.storage.redis_url).await.ok();
@@ -46,14 +46,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let executor_clone_signal = scalp_executor.clone();
     let books_clone_signal = order_books.clone();
     let prices_clone_signal = last_known_prices.clone();
-    let notional_budget = settings.trading.notional_per_trade;
 
-    // لیسنر دریافت سیگنال و کاشت اردر میکر (Post-Only Limit Order)
+    // ۱. لیسنر دریافت سیگنال و کاشت اردر داینامیک
     tokio::spawn(async move {
         if let Ok(client) = redis::Client::open(redis_url_sub.as_str()) {
             if let Ok(mut pubsub) = client.get_async_pubsub().await {
                 let _ = pubsub.subscribe("market:scalp_signals").await;
-                info!("Subscribed to AI Maker scalp signals.");
+                info!("Subscribed to Dynamic Scalp Signals.");
 
                 use futures_util::StreamExt;
                 let mut stream = pubsub.on_message();
@@ -91,18 +90,43 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             continue;
                         };
 
-                        let limit_price = if is_buy { metrics.best_bid } else { metrics.best_ask };
-                        let size = (notional_budget / limit_price).round_dp(4);
-
                         let mut executor = executor_clone_signal.lock().await;
-                        let _ = executor.place_maker_order(symbol, is_buy, size, &metrics);
+                        let _ = executor.place_maker_order(symbol, is_buy, &metrics);
                     }
                 }
             }
         }
     });
 
-    // حلقه تیک‌ها و ارزیابی پر شدن اردرهای میکر و بستن سودها
+    // ۲. لیسنر تغییر لحظه‌ای تنظیمات سرمایه و ریسک از داشبورد
+    let redis_url_cfg = settings.storage.redis_url.clone();
+    let executor_clone_cfg = scalp_executor.clone();
+    tokio::spawn(async move {
+        if let Ok(client) = redis::Client::open(redis_url_cfg.as_str()) {
+            if let Ok(mut pubsub) = client.get_async_pubsub().await {
+                let _ = pubsub.subscribe("config:capital_risk").await;
+                info!("Listening for live Capital & Risk updates...");
+
+                use futures_util::StreamExt;
+                let mut stream = pubsub.on_message();
+
+                while let Some(msg) = stream.next().await {
+                    let payload: String = msg.get_payload().unwrap_or_default();
+                    if let Ok(val) = serde_json::from_str::<Value>(&payload) {
+                        let cap = val["total_capital"].as_str().and_then(|s| s.parse::<Decimal>().ok());
+                        let alloc = val["allocation_pct"].as_f64().and_then(|f| Decimal::from_f64_retain(f));
+                        let lev = val["leverage"].as_f64().and_then(|f| Decimal::from_f64_retain(f));
+                        let kill = val["kill_switch"].as_bool();
+
+                        let mut executor = executor_clone_cfg.lock().await;
+                        executor.update_risk_config(cap, alloc, lev, kill);
+                    }
+                }
+            }
+        }
+    });
+
+    // ۳. حلقه دریافت تیک‌ها و مدیریت چرخه حیات پوزیشن‌ها
     while let Some(event) = event_rx.recv().await {
         match event {
             MarketEvent::Trade(trade) => {
@@ -114,7 +138,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                 let mut executor = scalp_executor.lock().await;
 
-                // ۱. بررسی پر شدن اردرهای لیمیت کاشته‌شده
+                // بررسی پر شدن سفارشات لیمیت
                 if let Some(pos) = executor.process_pending_orders_and_fills(&trade.symbol, trade.price) {
                     if let Some(mut r) = redis_pub.clone() {
                         let pos_event = serde_json::json!({
@@ -127,7 +151,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
                 }
                 
-                // ۲. ارزیابی خروج و ثبت در دفتر کل رسمی
+                // ارزیابی خروج و ثبت در دفتر کل حسابرسی‌شده
                 if let Some(record) = executor.evaluate_open_positions(&trade.symbol, trade.price, trade.price) {
                     if let Some(mut r) = redis_pub.clone() {
                         let record_json = serde_json::to_value(&record).unwrap_or_default();
