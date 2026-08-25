@@ -57,8 +57,8 @@ pub struct ClosedTradeRecord {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DynamicRiskConfig {
     pub total_capital: Decimal,
-    pub allocation_pct: Decimal, // مثلاً 0.30 معادل 30 درصد
-    pub leverage: Decimal,       // مثلاً 1x برای اسپات و 5x برای فیوچرز
+    pub allocation_pct: Decimal, // تخصیص سرمایه در هر معامله
+    pub leverage: Decimal,       // ضریب لوریج
     pub min_notional_guard: Decimal, // حداقل اردر مجاز صرافی (5 دلار)
     pub kill_switch: bool,
 }
@@ -87,25 +87,25 @@ impl HighFrequencyScalpExecutor {
             pending_orders: HashMap::new(),
             risk_config: DynamicRiskConfig {
                 total_capital: initial_cap,
-                allocation_pct: dec!(0.30), // تخصیص 30 درصد سرمایه در هر معامله
+                allocation_pct: dec!(0.30),
                 leverage: dec!(1.0),
-                min_notional_guard: dec!(5.0), // حداقل اردر 5 دلار برای صرافی
+                min_notional_guard: dec!(5.0),
                 kill_switch: false,
             },
             cash_balance: initial_cap,
             total_margin_in_use: dec!(0.0),
             maker_fee_ratio: Decimal::from_f64_retain(config.maker_fee_bps / 10000.0).unwrap_or(dec!(0.0001)),
-            tp_ratio: dec!(0.0018),            // 18 bps حد سود
-            sl_ratio: dec!(0.0014),            // 14 bps حد ضرر
-            breakeven_ratio: dec!(0.0008),     // 8 bps فعال شدن بریک‌ایون
-            early_harvest_ratio: dec!(0.0006), // 6 bps سیو سود سریع
+            tp_ratio: dec!(0.0018),            // 18 bps حد سود کامل
+            sl_ratio: dec!(0.0014),            // 14 bps حد ضرر ایمن
+            breakeven_ratio: dec!(0.0008),     // 8 bps فعال‌سازی ریسک‌فری
+            early_harvest_ratio: dec!(0.0010), // افزایش به 10 bps (0.10%) برای ۲ برابر شدن سود معاملات برنده
             max_holding_sec: 300,
             max_spread_bps: config.max_spread_bps,
             maker_timeout_sec: config.maker_timeout_seconds,
         }
     }
 
-    /// به‌روزرسانی داینامیک تنظیمات سرمایه و ریسک بدون ری‌استارت ربات
+    /// به‌روزرسانی داینامیک تنظیمات سرمایه و ریسک
     pub fn update_risk_config(&mut self, new_cap: Option<Decimal>, alloc_pct: Option<Decimal>, lev: Option<Decimal>, kill: Option<bool>) {
         if let Some(c) = new_cap {
             self.risk_config.total_capital = c;
@@ -128,29 +128,23 @@ impl HighFrequencyScalpExecutor {
         }
     }
 
-    /// محاسبه خودکار و داینامیک حجم معامله بر اساس سرمایه لحظه‌ای
+    /// محاسبه داینامیک حجم بر اساس موجودی نقد آزاد (رفع قطعی باگ اردرهای منفی)
     pub fn calculate_dynamic_notional(&self) -> Option<Decimal> {
         if self.risk_config.kill_switch {
             return None;
         }
 
-        let base_equity = self.cash_balance;
-        let notional = (base_equity * self.risk_config.allocation_pct * self.risk_config.leverage).round_dp(2);
+        let free_cash = self.cash_balance.max(dec!(0.0));
+        let notional = (free_cash * self.risk_config.allocation_pct * self.risk_config.leverage).round_dp(2);
 
-        // گارد محافظتی صرافی: اگر کمتر از 5 دلار باشد معامله لغو می‌شود
         if notional < self.risk_config.min_notional_guard {
-            warn!(
-                calculated = %notional,
-                min_required = %self.risk_config.min_notional_guard,
-                "⚠️ Trade rejected: Calculated size is below Exchange Min Notional"
-            );
             return None;
         }
 
         Some(notional)
     }
 
-    /// کاشت سفارش لیمیت با حجم کاملاً داینامیک
+    /// کاشت سفارش لیمیت میکر
     pub fn place_maker_order(
         &mut self,
         symbol: &str,
@@ -200,7 +194,7 @@ impl HighFrequencyScalpExecutor {
         Some(order)
     }
 
-    /// بررسی پر شدن اردر و فعال‌سازی تارگت‌های درصدی
+    /// بررسی پر شدن سفارش و محاسبه تارگت‌ها
     pub fn process_pending_orders_and_fills(&mut self, symbol: &str, trade_price: Decimal) -> Option<ScalpPosition> {
         let order = self.pending_orders.get(symbol)?.clone();
         let now = Utc::now();
@@ -267,7 +261,7 @@ impl HighFrequencyScalpExecutor {
         None
     }
 
-    /// ارزیابی خروج با سود و مدیریت درصدی برداشت سود
+    /// ارزیابی خروج با سود و مدیریت بریک‌ایون
     pub fn evaluate_open_positions(
         &mut self,
         symbol: &str,
@@ -287,7 +281,7 @@ impl HighFrequencyScalpExecutor {
             return None;
         }
 
-        // ۱. قفل کردن ریسک در نقطه ورود پس از 8 پیپ سود
+        // ۱. انتقال حد ضرر به نقطه سر‌به‌سر پس از ۸ پیپ سود
         if position.is_buy && mark_price >= position.entry_price * (dec!(1.0) + self.breakeven_ratio) && !position.is_breakeven_active {
             position.stop_loss_price = (position.entry_price + (position.entry_price * self.maker_fee_ratio * dec!(2))).round_dp(2);
             position.is_breakeven_active = true;
@@ -312,7 +306,7 @@ impl HighFrequencyScalpExecutor {
         };
         let current_net_pnl = current_raw_pnl - exit_fee;
 
-        // سیو سود داینامیک: اگر بعد از 15 ثانیه، سود خالص بالای 0.06% از حجم معامله بود
+        // سیو سود در ۱۰ پیپ سود خالص (افزایش سود هر ترید برنده)
         let dynamic_profit_harvest_target = notional_entry * self.early_harvest_ratio;
         let early_profit_take = hold_duration >= 15 && current_net_pnl >= dynamic_profit_harvest_target;
         let hit_time = hold_duration >= position.max_holding_sec;

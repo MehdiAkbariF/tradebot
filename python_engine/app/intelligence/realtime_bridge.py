@@ -106,15 +106,15 @@ class RealtimeScalpBridge:
         sub_30 = prices[-30:]
         volatility_bps = float(((max(sub_30) - min(sub_30)) / sub_30[0]) * 10000.0) if len(sub_30) > 1 else 0.0
 
-        # فیلتر بازار بدون نوسان (زیر 0.60 پیپ)
-        if volatility_bps < 0.60:
+        # افزایش فیلتر به 0.70 پیپ برای جلوگیری از ورود در رِنج‌های مرده
+        if volatility_bps < 0.70:
             now_sec = now.timestamp()
             if (now_sec - self.last_heartbeat_time) > 8.0:
                 self.last_heartbeat_time = now_sec
                 logger.info(f"💤 STANDBY (Low Volatility): {symbol} Vol={volatility_bps:.2f} bps | Waiting for range expansion...")
             return None
 
-        # ۲. فیلتر ترند قدرتمند بر اساس میانگین متحرک ۳۰۰ تیک اخیر (جلوگیری از خرید در ریزش)
+        # ۲. فیلتر ترند کلان ۳۰۰ تیک
         long_window = min(len(prices), 300)
         ma_long = float(np.mean(prices[-long_window:]))
         
@@ -125,7 +125,7 @@ class RealtimeScalpBridge:
             trend_bias = -1.0
             trend_str = "BEARISH 🔴"
 
-        # ۳. محاسبه عدم تعادل بوک (OFI) با ۶۰ تیک اخیر جهت حذف نویز تک‌تیک‌ها
+        # ۳. عدم تعادل جریان سفارشات (OFI)
         ofi_window = min(len(hist_bv), 60)
         b_vol = sum(list(hist_bv)[-ofi_window:])
         s_vol = sum(list(hist_sv)[-ofi_window:])
@@ -135,7 +135,7 @@ class RealtimeScalpBridge:
         decayed_sentiment = self.get_decayed_sentiment()
         now_sec = now.timestamp()
 
-        # محاسبه امتیاز آلفا
+        # محاسبه نمره آلفا با وزن‌دهی به ترند و اوردربوک
         alpha_score = (trend_bias * 0.45) + (live_ofi * 0.40) + (np.clip(ret_5s * 2500.0, -0.20, 0.20)) + (decayed_sentiment * 0.05)
 
         if (now_sec - self.last_heartbeat_time) > 5.0:
@@ -148,12 +148,11 @@ class RealtimeScalpBridge:
                 f"Alpha: {alpha_score:+.2f}"
             )
 
-        # ۴. صدور سیگنال اسکلپ همراه با کول‌داون ۳۰ ثانیه‌ای
+        # ۴. شلیک سیگنال فقط در صورت وجود مومنتوم پرقدرت (آلفای 0.50 و OFI بالای 0.40)
         if (now_sec - self.last_signal_time[symbol]) > 30.0:
-            # شرط ورود BUY: فقط در صورت ترند صعودی، قیمت بالای میانگین و فشار خرید قوی
-            if trend_bias > 0 and p_now >= ma_long and alpha_score >= 0.35 and live_ofi > 0.25:
+            if trend_bias > 0 and p_now >= ma_long and alpha_score >= 0.50 and live_ofi > 0.40:
                 self.last_signal_time[symbol] = now_sec
-                prob = round(0.75 + (alpha_score * 0.20), 4)
+                prob = round(0.80 + (alpha_score * 0.15), 4)
                 return {
                     "symbol": symbol,
                     "action": "BUY",
@@ -162,10 +161,9 @@ class RealtimeScalpBridge:
                     "decayed_sentiment": round(decayed_sentiment, 2),
                     "timestamp": now.isoformat()
                 }
-            # شرط ورود SELL: فقط در صورت ترند نزولی، قیمت زیر میانگین و فشار فروش قوی
-            elif trend_bias < 0 and p_now <= ma_long and alpha_score <= -0.35 and live_ofi < -0.25:
+            elif trend_bias < 0 and p_now <= ma_long and alpha_score <= -0.50 and live_ofi < -0.40:
                 self.last_signal_time[symbol] = now_sec
-                prob = round(0.75 + (abs(alpha_score) * 0.20), 4)
+                prob = round(0.80 + (abs(alpha_score) * 0.15), 4)
                 return {
                     "symbol": symbol,
                     "action": "SELL",
@@ -182,7 +180,7 @@ class RealtimeScalpBridge:
         pubsub = client.pubsub()
         await pubsub.subscribe("market:trades:btcusdt", "market:trades:ethusdt")
 
-        logger.info("Realtime Scalp Alpha Engine ACTIVE (Macro Trend & 60-Tick OFI)...")
+        logger.info("Realtime Scalp Alpha Engine ACTIVE (Strict High-Alpha Mode)...")
 
         while True:
             msg = await pubsub.get_message(ignore_subscribe_messages=True, timeout=0.01)
@@ -201,7 +199,7 @@ class RealtimeScalpBridge:
                 except Exception as e:
                     logger.error(f"Error processing market message: {e}")
 
-            # فید اخبار
+            # استریم اخبار
             news_streams = await client.xread({"events:news_raw": "$"}, count=2, block=10)
             if news_streams:
                 for _, messages in news_streams:
