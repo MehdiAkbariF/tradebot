@@ -37,6 +37,9 @@ pub struct TradingSettings {
     pub max_holding_seconds: i64,
     pub max_spread_bps: f64,
     pub min_ml_confidence: f64,
+    pub maker_fee_bps: f64,             // کارمزد میکر (۰.۰۱٪)
+    pub min_volatility_bps: f64,        // حداقل نوسان مجاز
+    pub maker_timeout_seconds: i64,     // زمان لغو اردر لیمیت پرنشده
 }
 
 #[derive(Debug, Deserialize, Clone)]

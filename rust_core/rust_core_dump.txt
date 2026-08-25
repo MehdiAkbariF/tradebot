@@ -1,0 +1,2192 @@
+﻿==================================================
+            RUST CORE TREE STRUCTURE              
+==================================================
+.\Cargo.toml
+.\src\config.rs
+.\src\error.rs
+.\src\lib.rs
+.\src\main.rs
+.\src\analytics\cross_asset.rs
+.\src\analytics\mod.rs
+.\src\analytics\regime.rs
+.\src\analytics\reliability.rs
+.\src\backtest\engine.rs
+.\src\backtest\mod.rs
+.\src\domain\book.rs
+.\src\domain\events.rs
+.\src\domain\mod.rs
+.\src\domain\portfolio.rs
+.\src\domain\types.rs
+.\src\execution\mod.rs
+.\src\market_data\binance.rs
+.\src\market_data\mod.rs
+.\src\market_data\normalizer.rs
+.\src\risk\engine.rs
+.\src\risk\lib.rs
+.\src\risk\mod.rs
+.\src\signal\engine.rs
+.\src\signal\mod.rs
+.\src\storage\mod.rs
+.\src\storage\postgres.rs
+.\src\storage\redis.rs
+.\tests\analytics_tests.rs
+.\tests\backtest_tests.rs
+.\tests\book_tests.rs
+.\tests\event_audit_tests.rs
+.\tests\risk_tests.rs
+.\tests\signal_tests.rs
+
+
+==================================================
+                 FILE CONTENTS                    
+==================================================
+
+==================================================
+FILE: .\Cargo.toml
+==================================================
+[package]
+name = "rust_core"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "rust_core"
+path = "src/lib.rs"
+
+[[bin]]
+name = "rust_core"
+path = "src/main.rs"
+
+[dependencies]
+tokio = { version = "1.38", features = ["full"] }
+tokio-tungstenite = { version = "0.23", features = ["native-tls"] }
+futures-util = "0.3"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+rust_decimal = { version = "1.35", features = ["serde-with-str"] }
+rust_decimal_macros = "1.35"
+chrono = { version = "0.4", features = ["serde"] }
+uuid = { version = "1.8", features = ["v4", "serde"] }
+thiserror = "1.0"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+config = "0.14"
+reqwest = { version = "0.12", features = ["json"] }
+redis = { version = "0.25", features = ["tokio-comp", "connection-manager"] }
+sqlx = { version = "0.7", features = ["runtime-tokio-native-tls", "postgres", "chrono", "rust_decimal", "uuid"] }
+
+[dev-dependencies]
+tokio-test = "0.4"
+
+==================================================
+FILE: .\src\config.rs
+==================================================
+// Ù…Ø³ÛŒØ±: rust_core/src/config.rs
+use crate::error::Result;
+use config::{Config, File};
+use rust_decimal::Decimal;
+use serde::Deserialize;
+use std::path::Path;
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct AppSettings {
+    pub environment: String,
+    pub log_level: String,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct MarketDataSettings {
+    pub symbols: Vec<String>,
+    pub binance_ws_url: String,
+    pub binance_rest_url: String,
+    pub reconnect_interval_ms: u64,
+    pub channel_buffer_size: usize,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct StorageSettings {
+    pub database_url: String,
+    pub redis_url: String,
+    pub enable_db_persistence: bool,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct TradingSettings {
+    pub initial_capital: Decimal,
+    pub notional_per_trade: Decimal,
+    pub take_profit_bps: f64,
+    pub stop_loss_bps: f64,
+    pub breakeven_trigger_bps: f64,
+    pub max_holding_seconds: i64,
+    pub max_spread_bps: f64,
+    pub min_ml_confidence: f64,
+    pub maker_fee_bps: f64,             // Ú©Ø§Ø±Ù…Ø²Ø¯ Ù…ÛŒÚ©Ø± (Û°.Û°Û±Ùª)
+    pub min_volatility_bps: f64,        // Ø­Ø¯Ø§Ù‚Ù„ Ù†ÙˆØ³Ø§Ù† Ù…Ø¬Ø§Ø²
+    pub maker_timeout_seconds: i64,     // Ø²Ù…Ø§Ù† Ù„ØºÙˆ Ø§Ø±Ø¯Ø± Ù„ÛŒÙ…ÛŒØª Ù¾Ø±Ù†Ø´Ø¯Ù‡
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct Settings {
+    pub app: AppSettings,
+    pub market_data: MarketDataSettings,
+    pub storage: StorageSettings,
+    pub trading: TradingSettings,
+}
+
+impl Settings {
+    pub fn new() -> Result<Self> {
+        let config_path = if Path::new("config/default.toml").exists() {
+            "config/default.toml"
+        } else if Path::new("../config/default.toml").exists() {
+            "../config/default.toml"
+        } else {
+            "config/default.toml"
+        };
+
+        let builder = Config::builder()
+            .add_source(File::with_name(config_path).required(true))
+            .add_source(config::Environment::default().separator("__"));
+
+        let config = builder.build()?;
+        Ok(config.try_deserialize()?)
+    }
+}
+
+==================================================
+FILE: .\src\error.rs
+==================================================
+use thiserror::Error;
+
+#[derive(Error, Debug)]
+pub enum AppError {
+    #[error("Configuration error: {0}")]
+    Config(#[from] config::ConfigError),
+
+    #[error("Network/WebSocket error: {0}")]
+    WebSocket(#[from] tokio_tungstenite::tungstenite::Error),
+
+    #[error("HTTP request error: {0}")]
+    Http(#[from] reqwest::Error),
+
+    #[error("Serialization/Deserialization error: {0}")]
+    Serialization(#[from] serde_json::Error),
+
+    #[error("Redis error: {0}")]
+    Redis(#[from] redis::RedisError),
+
+    #[error("Database error: {0}")]
+    Database(#[from] sqlx::Error),
+
+    #[error("Market Data Protocol error: {0}")]
+    Protocol(String),
+
+    #[error("OrderBook sequence gap detected on {symbol}: expected {expected}, got {received}")]
+    SequenceGap {
+        symbol: String,
+        expected: u64,
+        received: u64,
+    },
+}
+
+pub type Result<T> = std::result::Result<T, AppError>;
+
+==================================================
+FILE: .\src\lib.rs
+==================================================
+pub mod config;
+pub mod domain;
+pub mod error;
+pub mod market_data;
+pub mod storage;
+pub mod signal;
+pub mod risk;
+pub mod backtest;
+pub mod analytics;
+pub mod execution; // <--- Ø§ÛŒÙ† Ø®Ø· Ø§Ø¶Ø§ÙÙ‡ Ø´ÙˆØ¯
+
+==================================================
+FILE: .\src\main.rs
+==================================================
+// Ù…Ø³ÛŒØ±: rust_core/src/main.rs
+use rust_core::config::Settings;
+use rust_core::domain::book::OrderBook;
+use rust_core::domain::types::OrderBookMetrics;
+use rust_core::execution::HighFrequencyScalpExecutor;
+use rust_core::market_data::binance::{BinanceClient, MarketEvent};
+use rust_core::storage::redis::RedisPublisher;
+use rust_decimal::Decimal;
+use rust_decimal_macros::dec;
+use serde_json::Value;
+use std::collections::HashMap;
+use std::sync::Arc;
+use tokio::sync::{mpsc, Mutex};
+use tracing::{info, Level};
+use tracing_subscriber::FmtSubscriber;
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let subscriber = FmtSubscriber::builder().with_max_level(Level::INFO).finish();
+    tracing::subscriber::set_global_default(subscriber)?;
+
+    info!("Starting MI-EDTE Passive Maker & Volatility-Gated Scalp Engine...");
+
+    let settings = Settings::new()?;
+    let mut redis_pub = RedisPublisher::new(&settings.storage.redis_url).await.ok();
+    
+    let last_known_prices = Arc::new(Mutex::new(HashMap::<String, Decimal>::new()));
+    let order_books = Arc::new(Mutex::new(HashMap::<String, OrderBook>::new()));
+    
+    for s in &settings.market_data.symbols {
+        let mut book = OrderBook::new(s.to_uppercase());
+        book.is_initialized = true;
+        order_books.lock().await.insert(s.to_uppercase(), book);
+    }
+
+    let scalp_executor = Arc::new(Mutex::new(HighFrequencyScalpExecutor::new(&settings.trading)));
+
+    let (event_tx, mut event_rx) = mpsc::channel::<MarketEvent>(settings.market_data.channel_buffer_size);
+    let binance_client = BinanceClient::new(settings.market_data.clone(), event_tx);
+
+    tokio::spawn(async move {
+        binance_client.run_stream().await;
+    });
+
+    let redis_url_sub = settings.storage.redis_url.clone();
+    let executor_clone_signal = scalp_executor.clone();
+    let books_clone_signal = order_books.clone();
+    let prices_clone_signal = last_known_prices.clone();
+    let notional_budget = settings.trading.notional_per_trade;
+
+    // Ù„ÛŒØ³Ù†Ø± Ø¯Ø±ÛŒØ§ÙØª Ø³ÛŒÚ¯Ù†Ø§Ù„ Ùˆ Ú©Ø§Ø´Øª Ø§Ø±Ø¯Ø± Ù…ÛŒÚ©Ø± (Post-Only Limit Order)
+    tokio::spawn(async move {
+        if let Ok(client) = redis::Client::open(redis_url_sub.as_str()) {
+            if let Ok(mut pubsub) = client.get_async_pubsub().await {
+                let _ = pubsub.subscribe("market:scalp_signals").await;
+                info!("Subscribed to AI Maker scalp signals.");
+
+                use futures_util::StreamExt;
+                let mut stream = pubsub.on_message();
+
+                while let Some(msg) = stream.next().await {
+                    let payload: String = msg.get_payload().unwrap_or_default();
+                    if let Ok(val) = serde_json::from_str::<Value>(&payload) {
+                        let symbol = val["symbol"].as_str().unwrap_or("BTCUSDT");
+                        let action = val["action"].as_str().unwrap_or("BUY");
+                        let is_buy = action == "BUY";
+
+                        let live_price = {
+                            let prices = prices_clone_signal.lock().await;
+                            prices.get(symbol).cloned()
+                        };
+
+                        let current_price = match live_price {
+                            Some(p) if p > dec!(0.0) => p,
+                            _ => continue,
+                        };
+
+                        let mut books = books_clone_signal.lock().await;
+                        let metrics = if let Some(book) = books.get_mut(symbol) {
+                            book.compute_metrics().unwrap_or(OrderBookMetrics {
+                                symbol: symbol.to_string(),
+                                best_bid: current_price - dec!(0.1),
+                                best_ask: current_price + dec!(0.1),
+                                spread_bps: 0.15,
+                                mid_price: current_price,
+                                micro_price: current_price,
+                                imbalance_top10: if is_buy { 0.25 } else { -0.25 },
+                                timestamp: chrono::Utc::now(),
+                            })
+                        } else {
+                            continue;
+                        };
+
+                        let limit_price = if is_buy { metrics.best_bid } else { metrics.best_ask };
+                        let size = (notional_budget / limit_price).round_dp(4);
+
+                        let mut executor = executor_clone_signal.lock().await;
+                        let _ = executor.place_maker_order(symbol, is_buy, size, &metrics);
+                    }
+                }
+            }
+        }
+    });
+
+    // Ø­Ù„Ù‚Ù‡ ØªÛŒÚ©â€ŒÙ‡Ø§ Ùˆ Ø§Ø±Ø²ÛŒØ§Ø¨ÛŒ Ù¾Ø± Ø´Ø¯Ù† Ø§Ø±Ø¯Ø±Ù‡Ø§ÛŒ Ù…ÛŒÚ©Ø± Ùˆ Ø¨Ø³ØªÙ† Ø³ÙˆØ¯Ù‡Ø§
+    while let Some(event) = event_rx.recv().await {
+        match event {
+            MarketEvent::Trade(trade) => {
+                last_known_prices.lock().await.insert(trade.symbol.clone(), trade.price);
+
+                if let Some(ref mut r) = redis_pub {
+                    let _ = r.publish_trade(&trade).await;
+                }
+
+                let mut executor = scalp_executor.lock().await;
+
+                // Û±. Ø¨Ø±Ø±Ø³ÛŒ Ù¾Ø± Ø´Ø¯Ù† Ø§Ø±Ø¯Ø±Ù‡Ø§ÛŒ Ù„ÛŒÙ…ÛŒØª Ú©Ø§Ø´ØªÙ‡â€ŒØ´Ø¯Ù‡
+                if let Some(pos) = executor.process_pending_orders_and_fills(&trade.symbol, trade.price) {
+                    if let Some(mut r) = redis_pub.clone() {
+                        let pos_event = serde_json::json!({
+                            "symbol": trade.symbol,
+                            "action": if pos.is_buy { "BUY" } else { "SELL" },
+                            "entry_price": pos.entry_price,
+                            "pnl": 0.0
+                        });
+                        let _ = r.publish_json("market:positions", &pos_event).await;
+                    }
+                }
+                
+                // Û². Ø§Ø±Ø²ÛŒØ§Ø¨ÛŒ Ø®Ø±ÙˆØ¬ Ùˆ Ø«Ø¨Øª Ø¯Ø± Ø¯ÙØªØ± Ú©Ù„ Ø±Ø³Ù…ÛŒ
+                if let Some(record) = executor.evaluate_open_positions(&trade.symbol, trade.price, trade.price) {
+                    if let Some(mut r) = redis_pub.clone() {
+                        let record_json = serde_json::to_value(&record).unwrap_or_default();
+                        let _ = r.publish_json("market:trade_ledger", &record_json).await;
+
+                        let close_event = serde_json::json!({
+                            "symbol": record.symbol,
+                            "action": "CLOSE",
+                            "entry_price": record.entry_price,
+                            "exit_price": record.exit_price,
+                            "pnl": record.net_pnl,
+                            "reason": record.exit_reason
+                        });
+                        let _ = r.publish_json("market:positions", &close_event).await;
+                    }
+                }
+            }
+            MarketEvent::Depth(delta) => {
+                let mut books = order_books.lock().await;
+                if let Some(book) = books.get_mut(&delta.symbol) {
+                    let _ = book.apply_delta(&delta);
+                    if let Some(metrics) = book.compute_metrics() {
+                        if let Some(ref mut r) = redis_pub {
+                            let _ = r.publish_metrics(&metrics).await;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
+
+==================================================
+FILE: .\src\analytics\cross_asset.rs
+==================================================
+pub struct CrossAssetAnalyzer;
+
+impl CrossAssetAnalyzer {
+    pub fn compute_lead_lag(leader_returns: &[f64], follower_returns: &[f64], max_lag: usize) -> (isize, f64) {
+        if leader_returns.len() != follower_returns.len() || leader_returns.is_empty() {
+            return (0, 0.0);
+        }
+
+        let mut best_lag = 0;
+        let mut max_correlation = -1.0;
+
+        for lag in -(max_lag as isize)..= (max_lag as isize) {
+            let corr = Self::shifted_correlation(leader_returns, follower_returns, lag);
+            if corr > max_correlation {
+                max_correlation = corr;
+                best_lag = lag;
+            }
+        }
+
+        (best_lag, max_correlation)
+    }
+
+    fn shifted_correlation(x: &[f64], y: &[f64], lag: isize) -> f64 {
+        let len = x.len() as isize;
+        let start = std::cmp::max(0, -lag) as usize;
+        let end = std::cmp::min(len, len - lag) as usize;
+
+        if start >= end {
+            return 0.0;
+        }
+
+        let mut sum_x = 0.0;
+        let mut sum_y = 0.0;
+        let count = (end - start) as f64;
+
+        for i in start..end {
+            let x_idx = i as isize;
+            let y_idx = i as isize + lag;
+            sum_x += x[x_idx as usize];
+            sum_y += y[y_idx as usize];
+        }
+
+        let mean_x = sum_x / count;
+        let mean_y = sum_y / count;
+
+        let mut num = 0.0;
+        let mut den_x = 0.0;
+        let mut den_y = 0.0;
+
+        for i in start..end {
+            let x_idx = i as isize;
+            let y_idx = i as isize + lag;
+            let xv = x[x_idx as usize] - mean_x;
+            let yv = y[y_idx as usize] - mean_y;
+            num += xv * yv;
+            den_x += xv * xv;
+            den_y += yv * yv;
+        }
+
+        let den = (den_x * den_y).sqrt();
+        if den == 0.0 {
+            0.0
+        } else {
+            num / den
+        }
+    }
+}
+
+==================================================
+FILE: .\src\analytics\mod.rs
+==================================================
+pub mod regime;
+pub mod cross_asset;
+pub mod reliability;
+
+==================================================
+FILE: .\src\analytics\regime.rs
+==================================================
+// Ù…Ø³ÛŒØ±: rust_core/src/analytics/regime.rs
+#[derive(Debug, Clone, PartialEq)]
+pub enum MarketRegime {
+    BullishTrend,
+    BearishTrend,
+    HighVolatilityRange,
+    LowVolatilityConsolidation,
+}
+
+pub struct RegimeDetector {
+    volatility_threshold: f64,
+}
+
+impl RegimeDetector {
+    pub fn new(volatility_threshold: f64) -> Self {
+        Self { volatility_threshold }
+    }
+
+    pub fn detect_regime(&self, returns: &[f64], current_spread_bps: f64) -> MarketRegime {
+        if returns.is_empty() {
+            return MarketRegime::LowVolatilityConsolidation;
+        }
+
+        let mean_return: f64 = returns.iter().sum::<f64>() / returns.len() as f64;
+        let variance: f64 = returns.iter().map(|r| (r - mean_return).powi(2)).sum::<f64>() / returns.len() as f64;
+        let volatility = variance.sqrt();
+
+        if volatility > self.volatility_threshold || current_spread_bps > 5.0 {
+            return MarketRegime::HighVolatilityRange;
+        }
+
+        if mean_return > 0.001 {
+            MarketRegime::BullishTrend
+        } else if mean_return < -0.001 {
+            MarketRegime::BearishTrend
+        } else {
+            MarketRegime::LowVolatilityConsolidation
+        }
+    }
+}
+
+==================================================
+FILE: .\src\analytics\reliability.rs
+==================================================
+use std::collections::HashMap;
+
+pub struct SourceReliabilityRegistry {
+    scores: HashMap<String, f64>,
+}
+
+impl SourceReliabilityRegistry {
+    pub fn new() -> Self {
+        let mut scores = HashMap::new();
+        scores.insert("reuters.com".into(), 0.95);
+        scores.insert("bloomberg.com".into(), 0.95);
+        scores.insert("coindesk.com".into(), 0.80);
+        scores.insert("cointelegraph.com".into(), 0.75);
+        
+        Self { scores }
+    }
+
+    pub fn get_score(&self, source_id: &str) -> f64 {
+        *self.scores.get(source_id).unwrap_or(&0.5)
+    }
+
+    pub fn update_score(&mut self, source_id: &str, accuracy_delta: f64) {
+        let current = self.scores.entry(source_id.to_string()).or_insert(0.5);
+        *current = (*current + accuracy_delta).clamp(0.0, 1.0);
+    }
+}
+
+==================================================
+FILE: .\src\backtest\engine.rs
+==================================================
+use chrono::{DateTime, Utc};
+use rust_decimal::Decimal; // <--- Ø§ÛŒÙ…Ù¾ÙˆØ±Øª Ø§ØµÙ„ÛŒ Ú©Ù‡ Ø¬Ø§ Ø§ÙØªØ§Ø¯Ù‡ Ø¨ÙˆØ¯
+use rust_decimal_macros::dec;
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BacktestConfig {
+    pub initial_capital: Decimal,
+    pub maker_fee_bps: f64,
+    pub taker_fee_bps: f64,
+    pub simulated_latency_ms: u64,
+}
+
+#[derive(Debug, Clone)]
+pub struct SimulatedTrade {
+    pub symbol: String,
+    pub side: String,
+    pub entry_price: Decimal,
+    pub exit_price: Decimal,
+    pub quantity: Decimal,
+    pub pnl: Decimal,
+    pub fee_paid: Decimal,
+    pub entry_ts: DateTime<Utc>,
+    pub exit_ts: DateTime<Utc>,
+}
+
+pub struct EventDrivenBacktester {
+    config: BacktestConfig,
+    cash: Decimal,
+    trades: Vec<SimulatedTrade>,
+}
+
+impl EventDrivenBacktester {
+    pub fn new(config: BacktestConfig) -> Self {
+        let initial_capital = config.initial_capital;
+        Self {
+            config,
+            cash: initial_capital,
+            trades: Vec::new(),
+        }
+    }
+
+    /// Ø´Ø¨ÛŒÙ‡â€ŒØ³Ø§Ø²ÛŒ ÙˆØ±ÙˆØ¯ Ùˆ Ø®Ø±ÙˆØ¬ Ø§Ø² Ù…Ø¹Ø§Ù…Ù„Ù‡ Ø¨Ø§ Ø§Ø­ØªØ³Ø§Ø¨ Ú©Ø§Ø±Ù…Ø²Ø¯ Ùˆ Ø§Ø³Ù„ÛŒÙ¾ÛŒØ¬
+    pub fn execute_simulated_trade(
+        &mut self,
+        symbol: &str,
+        is_buy: bool,
+        entry_price: Decimal,
+        exit_price: Decimal,
+        quantity: Decimal,
+        entry_ts: DateTime<Utc>,
+        exit_ts: DateTime<Utc>,
+    ) {
+        let notional_entry = entry_price * quantity;
+        let notional_exit = exit_price * quantity;
+
+        // Ù…Ø­Ø§Ø³Ø¨Ù‡ Ú©Ø§Ø±Ù…Ø²Ø¯ (Taker fee Ø¨Ù‡ Ø¹Ù†ÙˆØ§Ù† Ù¾ÛŒØ´â€ŒÙØ±Ø¶ Ø§Ø¬Ø±Ø§ÛŒ Ù…Ø§Ø±Ú©Øª Ø§Ø±Ø¯Ø±)
+        let fee_rate = Decimal::from_f64_retain(self.config.taker_fee_bps / 10000.0).unwrap_or(dec!(0.0005));
+        let entry_fee = notional_entry * fee_rate;
+        let exit_fee = notional_exit * fee_rate;
+        let total_fee = entry_fee + exit_fee;
+
+        let raw_pnl = if is_buy {
+            notional_exit - notional_entry
+        } else {
+            notional_entry - notional_exit
+        };
+
+        let net_pnl = raw_pnl - total_fee;
+        self.cash += net_pnl;
+
+        self.trades.push(SimulatedTrade {
+            symbol: symbol.to_string(),
+            side: if is_buy { "BUY".into() } else { "SELL".into() },
+            entry_price,
+            exit_price,
+            quantity,
+            pnl: net_pnl,
+            fee_paid: total_fee,
+            entry_ts,
+            exit_ts,
+        });
+    }
+
+    /// Ù…Ø­Ø§Ø³Ø¨Ù‡ Ø¢Ù…Ø§Ø±Ù‡Ø§ÛŒ Ø¹Ù…Ù„Ú©Ø±Ø¯ Ù†Ù‡Ø§ÛŒÛŒ Ø§Ø³ØªØ±Ø§ØªÚ˜ÛŒ (Tear-Sheet Metrics)
+    pub fn generate_performance_report(&self) -> BacktestReport {
+        let total_trades = self.trades.len();
+        let mut winning_trades = 0;
+        let mut losing_trades = 0;
+        let mut total_pnl = Decimal::ZERO;
+        let mut max_drawdown = Decimal::ZERO;
+        let mut peak_capital = self.config.initial_capital;
+        let mut current_capital = self.config.initial_capital;
+
+        for t in &self.trades {
+            total_pnl += t.pnl;
+            current_capital += t.pnl;
+
+            if current_capital > peak_capital {
+                peak_capital = current_capital;
+            } else {
+                let drawdown = peak_capital - current_capital;
+                if drawdown > max_drawdown {
+                    max_drawdown = drawdown;
+                }
+            }
+
+            if t.pnl > Decimal::ZERO {
+                winning_trades += 1;
+            } else {
+                losing_trades += 1;
+            }
+        }
+
+        let win_rate = if total_trades > 0 {
+            winning_trades as f64 / total_trades as f64
+        } else {
+            0.0
+        };
+
+        BacktestReport {
+            initial_capital: self.config.initial_capital,
+            final_capital: current_capital,
+            net_pnl: total_pnl,
+            total_trades,
+            winning_trades,
+            losing_trades,
+            win_rate,
+            max_drawdown,
+        }
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct BacktestReport {
+    pub initial_capital: Decimal,
+    pub final_capital: Decimal,
+    pub net_pnl: Decimal,
+    pub total_trades: usize,
+    pub winning_trades: usize,
+    pub losing_trades: usize,
+    pub win_rate: f64,
+    pub max_drawdown: Decimal,
+}
+
+==================================================
+FILE: .\src\backtest\mod.rs
+==================================================
+pub mod engine;
+
+==================================================
+FILE: .\src\domain\book.rs
+==================================================
+use super::types::{DepthDelta, OrderBookMetrics};
+use crate::error::{AppError, Result};
+use chrono::Utc;
+use rust_decimal::Decimal;
+use rust_decimal_macros::dec;
+use std::collections::BTreeMap;
+use std::cmp::Reverse;
+
+#[derive(Debug, Clone)]
+pub struct OrderBook {
+    pub symbol: String,
+    pub last_update_id: u64,
+    // Bids sorted descending: Reverse(Price) ensures highest price is at .iter().next()
+    pub bids: BTreeMap<Reverse<Decimal>, Decimal>,
+    // Asks sorted ascending: lowest price is at .iter().next()
+    pub asks: BTreeMap<Decimal, Decimal>,
+    pub is_initialized: bool,
+}
+
+impl OrderBook {
+    pub fn new(symbol: String) -> Self {
+        Self {
+            symbol,
+            last_update_id: 0,
+            bids: BTreeMap::new(),
+            asks: BTreeMap::new(),
+            is_initialized: false,
+        }
+    }
+
+    pub fn apply_snapshot(&mut self, last_update_id: u64, bids: Vec<(Decimal, Decimal)>, asks: Vec<(Decimal, Decimal)>) {
+        self.bids.clear();
+        self.asks.clear();
+
+        for (price, qty) in bids {
+            if qty > dec!(0) {
+                self.bids.insert(Reverse(price), qty);
+            }
+        }
+
+        for (price, qty) in asks {
+            if qty > dec!(0) {
+                self.asks.insert(price, qty);
+            }
+        }
+
+        self.last_update_id = last_update_id;
+        self.is_initialized = true;
+    }
+
+    pub fn apply_delta(&mut self, delta: &DepthDelta) -> Result<()> {
+        if !self.is_initialized {
+            return Ok(());
+        }
+
+        // Sequence Validation according to Binance documentation
+        if delta.final_update_id <= self.last_update_id {
+            // Drop old update
+            return Ok(());
+        }
+
+        if delta.first_update_id > self.last_update_id + 1 {
+            return Err(AppError::SequenceGap {
+                symbol: self.symbol.clone(),
+                expected: self.last_update_id + 1,
+                received: delta.first_update_id,
+            });
+        }
+
+        // Apply Bids updates
+        for (price, qty) in &delta.bids {
+            if *qty == dec!(0) {
+                self.bids.remove(&Reverse(*price));
+            } else {
+                self.bids.insert(Reverse(*price), *qty);
+            }
+        }
+
+        // Apply Asks updates
+        for (price, qty) in &delta.asks {
+            if *qty == dec!(0) {
+                self.asks.remove(price);
+            } else {
+                self.asks.insert(*price, *qty);
+            }
+        }
+
+        self.last_update_id = delta.final_update_id;
+        Ok(())
+    }
+
+    pub fn best_bid(&self) -> Option<(Decimal, Decimal)> {
+        self.bids.iter().next().map(|(Reverse(p), q)| (*p, *q))
+    }
+
+    pub fn best_ask(&self) -> Option<(Decimal, Decimal)> {
+        self.asks.iter().next().map(|(p, q)| (*p, *q))
+    }
+
+    pub fn compute_metrics(&self) -> Option<OrderBookMetrics> {
+        let (best_bid_p, best_bid_q) = self.best_bid()?;
+        let (best_ask_p, best_ask_q) = self.best_ask()?;
+
+        if best_bid_p >= best_ask_q && best_ask_p <= best_bid_p {
+            // Crossed book guard
+            return None;
+        }
+
+        let mid_price = (best_bid_p + best_ask_p) / dec!(2);
+        
+        let spread = best_ask_p - best_bid_p;
+        let spread_bps = if mid_price > dec!(0) {
+            let ratio = spread / mid_price;
+            let ratio_f64: f64 = ratio.to_string().parse().unwrap_or(0.0);
+            ratio_f64 * 10000.0
+        } else {
+            0.0
+        };
+
+        // Micro-price calculation: (AskQty * BestBid + BidQty * BestAsk) / (BidQty + AskQty)
+        let total_top_qty = best_bid_q + best_ask_q;
+        let micro_price = if total_top_qty > dec!(0) {
+            (best_ask_q * best_bid_p + best_bid_q * best_ask_p) / total_top_qty
+        } else {
+            mid_price
+        };
+
+        // Imbalance over top 10 levels
+        let bid_volume_10: Decimal = self.bids.values().take(10).sum();
+        let ask_volume_10: Decimal = self.asks.values().take(10).sum();
+        let total_vol = bid_volume_10 + ask_volume_10;
+        
+        let imbalance = if total_vol > dec!(0) {
+            let diff = bid_volume_10 - ask_volume_10;
+            let imb_ratio = diff / total_vol;
+            imb_ratio.to_string().parse().unwrap_or(0.0)
+        } else {
+            0.0
+        };
+
+        Some(OrderBookMetrics {
+            symbol: self.symbol.clone(),
+            best_bid: best_bid_p,
+            best_ask: best_ask_p,
+            spread_bps,
+            mid_price,
+            micro_price,
+            imbalance_top10: imbalance,
+            timestamp: Utc::now(),
+        })
+    }
+}
+
+==================================================
+FILE: .\src\domain\events.rs
+==================================================
+use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TimeAudit {
+    pub source_ts: DateTime<Utc>,      // Generated at source exchange/publisher
+    pub received_ts: DateTime<Utc>,    // Received by our network adapter
+    pub processed_ts: DateTime<Utc>,   // Parsed and enriched by intelligence/NLP
+    pub available_ts: DateTime<Utc>,   // Officially available to signal engine (Prevents Look-Ahead)
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NewsEvent {
+    pub id: String,
+    pub source_id: String,
+    pub external_id: String,
+    pub title: String,
+    pub body: Option<String>,
+    pub url: Option<String>,
+    pub time_audit: TimeAudit,
+    pub hash_signature: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MacroEconomicEvent {
+    pub id: String,
+    pub event_name: String,
+    pub country: String,
+    pub currency: String,
+    pub actual: Option<f64>,
+    pub forecast: Option<f64>,
+    pub previous: Option<f64>,
+    pub surprise_z_score: Option<f64>,
+    pub time_audit: TimeAudit,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MarketEvent {
+    pub id: String,
+    pub event_type: String,
+    pub primary_asset: String,
+    pub relevance_score: f64,
+    pub novelty_score: f64,
+    pub summary: String,
+    pub first_seen_ts: DateTime<Utc>,
+    pub available_ts: DateTime<Utc>,
+    pub related_news_ids: Vec<String>,
+}
+
+==================================================
+FILE: .\src\domain\mod.rs
+==================================================
+pub mod book;
+pub mod types;
+pub mod events;
+pub mod portfolio;
+
+==================================================
+FILE: .\src\domain\portfolio.rs
+==================================================
+use chrono::{DateTime, Utc};
+use rust_decimal::Decimal;
+use serde::{Deserialize, Serialize};
+use super::types::OrderSide;
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub enum SignalAction {
+    Buy,
+    Sell,
+    Hold,
+    NoTrade,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SignalCandidate {
+    pub signal_id: String,
+    pub event_id: Option<String>,
+    pub symbol: String,
+    pub action: SignalAction,
+    pub confidence: f64,
+    pub expected_horizon_sec: u32,
+    pub expected_return: f64,
+    pub decision_ts: DateTime<Utc>,
+    pub reason_codes: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OrderIntent {
+    pub order_id: String,
+    pub signal_id: String,
+    pub symbol: String,
+    pub side: OrderSide,
+    pub quantity: Decimal,
+    pub limit_price: Option<Decimal>,
+    pub submitted_ts: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PositionState {
+    pub symbol: String,
+    pub current_qty: Decimal,
+    pub avg_entry_price: Decimal,
+    pub realized_pnl: Decimal,
+    pub unrealized_pnl: Decimal,
+    pub is_open: bool,
+    pub updated_ts: DateTime<Utc>,
+}
+
+==================================================
+FILE: .\src\domain\types.rs
+==================================================
+use chrono::{DateTime, Utc};
+use rust_decimal::Decimal;
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub enum OrderSide {
+    Buy,
+    Sell,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TradeTick {
+    pub symbol: String,
+    pub trade_id: u64,
+    pub price: Decimal,
+    pub quantity: Decimal,
+    pub is_buyer_maker: bool,
+    pub exchange_ts: DateTime<Utc>,
+    pub received_ts: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DepthDelta {
+    pub symbol: String,
+    pub first_update_id: u64,
+    pub final_update_id: u64,
+    pub bids: Vec<(Decimal, Decimal)>, // (Price, Size)
+    pub asks: Vec<(Decimal, Decimal)>,
+    pub exchange_ts: DateTime<Utc>,
+    pub received_ts: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OrderBookMetrics {
+    pub symbol: String,
+    pub best_bid: Decimal,
+    pub best_ask: Decimal,
+    pub spread_bps: f64,
+    pub mid_price: Decimal,
+    pub micro_price: Decimal,
+    pub imbalance_top10: f64,
+    pub timestamp: DateTime<Utc>,
+}
+
+==================================================
+FILE: .\src\execution\mod.rs
+==================================================
+// Ù…Ø³ÛŒØ±: rust_core/src/execution/mod.rs
+use crate::config::TradingSettings;
+use crate::domain::types::OrderBookMetrics;
+use chrono::{DateTime, Utc};
+use rust_decimal::Decimal;
+use rust_decimal_macros::dec;
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use tracing::info;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PendingMakerOrder {
+    pub id: String,
+    pub symbol: String,
+    pub is_buy: bool,
+    pub limit_price: Decimal,
+    pub quantity: Decimal,
+    pub notional: Decimal,
+    pub placed_at: DateTime<Utc>,
+    pub timeout_seconds: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ScalpPosition {
+    pub id: String,
+    pub symbol: String,
+    pub quantity: Decimal,
+    pub entry_price: Decimal,
+    pub is_buy: bool,
+    pub take_profit_price: Decimal,
+    pub stop_loss_price: Decimal,
+    pub is_breakeven_active: bool,
+    pub is_profit_locked: bool,
+    pub is_open: bool,
+    pub opened_at: DateTime<Utc>,
+    pub max_holding_sec: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ClosedTradeRecord {
+    pub id: String,
+    pub symbol: String,
+    pub action: String,
+    pub entry_price: Decimal,
+    pub exit_price: Decimal,
+    pub quantity: Decimal,
+    pub notional_usd: Decimal,
+    pub fee_paid: Decimal,
+    pub net_pnl: Decimal,
+    pub pnl_percent: f64,
+    pub duration_seconds: i64,
+    pub exit_reason: String,
+    pub opened_at: String,
+    pub closed_at: String,
+}
+
+pub struct HighFrequencyScalpExecutor {
+    positions: HashMap<String, ScalpPosition>,
+    pending_orders: HashMap<String, PendingMakerOrder>,
+    cash_balance: Decimal,
+    total_margin_in_use: Decimal,
+    maker_fee_ratio: Decimal,
+    tp_ratio: Decimal,
+    sl_ratio: Decimal,
+    breakeven_ratio: Decimal,
+    max_holding_sec: i64,
+    max_spread_bps: f64,
+    maker_timeout_sec: i64,
+}
+
+impl HighFrequencyScalpExecutor {
+    pub fn new(config: &TradingSettings) -> Self {
+        Self {
+            positions: HashMap::new(),
+            pending_orders: HashMap::new(),
+            cash_balance: config.initial_capital,
+            total_margin_in_use: dec!(0.0),
+            maker_fee_ratio: Decimal::from_f64_retain(config.maker_fee_bps / 10000.0).unwrap_or(dec!(0.0001)),
+            tp_ratio: Decimal::from_f64_retain(config.take_profit_bps / 10000.0).unwrap_or(dec!(0.0025)),
+            sl_ratio: Decimal::from_f64_retain(config.stop_loss_bps / 10000.0).unwrap_or(dec!(0.0015)),
+            breakeven_ratio: Decimal::from_f64_retain(config.breakeven_trigger_bps / 10000.0).unwrap_or(dec!(0.0008)),
+            max_holding_sec: config.max_holding_seconds,
+            max_spread_bps: config.max_spread_bps,
+            maker_timeout_sec: config.maker_timeout_seconds,
+        }
+    }
+
+    /// Ú©Ø§Ø´Øª Ø³ÙØ§Ø±Ø´ Ù„ÛŒÙ…ÛŒØª Ù…ÛŒÚ©Ø± Ø¯Ø± Ø¨Ù‡ØªØ±ÛŒÙ† Ù‚ÛŒÙ…Øª Ø¯ÙØªØ± Ø³ÙØ§Ø±Ø´Ø§Øª
+    pub fn place_maker_order(
+        &mut self,
+        symbol: &str,
+        is_buy: bool,
+        size: Decimal,
+        metrics: &OrderBookMetrics,
+    ) -> Option<PendingMakerOrder> {
+        if metrics.spread_bps > self.max_spread_bps {
+            return None;
+        }
+
+        if let Some(pos) = self.positions.get(symbol) {
+            if pos.is_open {
+                return None;
+            }
+        }
+        if self.pending_orders.contains_key(symbol) {
+            return None;
+        }
+
+        let limit_price = (if is_buy { metrics.best_bid } else { metrics.best_ask }).round_dp(2);
+        if limit_price <= dec!(0.0) {
+            return None;
+        }
+
+        let notional = limit_price * size;
+        let order = PendingMakerOrder {
+            id: uuid::Uuid::new_v4().to_string(),
+            symbol: symbol.to_string(),
+            is_buy,
+            limit_price,
+            quantity: size,
+            notional,
+            placed_at: Utc::now(),
+            timeout_seconds: self.maker_timeout_sec,
+        };
+
+        self.pending_orders.insert(symbol.to_string(), order.clone());
+        info!(symbol = %symbol, side = if is_buy { "BUY" } else { "SELL" }, price = %limit_price, "ðŸ“¥ Maker Limit Order PLACED (0.01% Fee Tier)");
+        Some(order)
+    }
+
+    /// Ø¨Ø±Ø±Ø³ÛŒ Ù¾Ø± Ø´Ø¯Ù† Ø§Ø±Ø¯Ø± Ùˆ Ù…Ø­Ø§Ø³Ø¨Ù‡ Ø¯Ù‚ÛŒÙ‚ Ø­Ø¯ Ø³ÙˆØ¯ Ùˆ Ø­Ø¯ Ø¶Ø±Ø± Ø¨Ø±Ø§ÛŒ Buy Ùˆ Sell
+    pub fn process_pending_orders_and_fills(&mut self, symbol: &str, trade_price: Decimal) -> Option<ScalpPosition> {
+        let order = self.pending_orders.get(symbol)?.clone();
+        let now = Utc::now();
+        let age = (now - order.placed_at).num_seconds();
+
+        let is_filled = if order.is_buy {
+            trade_price <= order.limit_price
+        } else {
+            trade_price >= order.limit_price
+        };
+
+        if is_filled {
+            self.pending_orders.remove(symbol);
+            let fee = order.notional * self.maker_fee_ratio;
+
+            // Ù…Ø­Ø§Ø³Ø¨Ù‡ Ø­Ø¯ Ø³ÙˆØ¯: Ø¨Ø±Ø§ÛŒ Ø®Ø±ÛŒØ¯ Ø¨Ø§Ù„Ø§ØªØ± Ùˆ Ø¨Ø±Ø§ÛŒ ÙØ±ÙˆØ´ Ù¾Ø§ÛŒÛŒÙ†â€ŒØªØ±
+            let tp_price = if order.is_buy {
+                (order.limit_price * (dec!(1.0) + self.tp_ratio)).round_dp(2)
+            } else {
+                (order.limit_price * (dec!(1.0) - self.tp_ratio)).round_dp(2)
+            };
+
+            // Ù…Ø­Ø§Ø³Ø¨Ù‡ Ø­Ø¯ Ø¶Ø±Ø± (Ø§ØµÙ„Ø§Ø­ ÙØ±Ù…ÙˆÙ„ ÙØ±ÙˆØ´ Ø¨Ø§ Ø¹Ù„Ø§Ù…Øª +)
+            let sl_price = if order.is_buy {
+                (order.limit_price * (dec!(1.0) - self.sl_ratio)).round_dp(2)
+            } else {
+                (order.limit_price * (dec!(1.0) + self.sl_ratio)).round_dp(2) // Ø§ØµÙ„Ø§Ø­ Ù‚Ø·Ø¹ÛŒ Ø¹Ù„Ø§Ù…Øª +
+            };
+
+            let position = ScalpPosition {
+                id: order.id,
+                symbol: symbol.to_string(),
+                quantity: if order.is_buy { order.quantity } else { -order.quantity },
+                entry_price: order.limit_price,
+                is_buy: order.is_buy,
+                take_profit_price: tp_price,
+                stop_loss_price: sl_price,
+                is_breakeven_active: false,
+                is_profit_locked: false,
+                is_open: true,
+                opened_at: Utc::now(),
+                max_holding_sec: self.max_holding_sec,
+            };
+
+            self.cash_balance -= (order.notional + fee);
+            self.total_margin_in_use += order.notional;
+            self.positions.insert(symbol.to_string(), position.clone());
+
+            info!(
+                symbol = %symbol,
+                side = if order.is_buy { "BUY" } else { "SELL" },
+                entry = %order.limit_price,
+                tp = %tp_price,
+                sl = %sl_price,
+                "âš¡ Maker Order FILLED! Tracking Target..."
+            );
+            return Some(position);
+        }
+
+        if age >= order.timeout_seconds {
+            self.pending_orders.remove(symbol);
+            info!(symbol = %symbol, "âŒ› Stale Maker Order CANCELLED");
+        }
+
+        None
+    }
+
+    /// Ø§Ø±Ø²ÛŒØ§Ø¨ÛŒ Ø®Ø±ÙˆØ¬ Ø¨Ø§ Ø³ÙˆØ¯ Ùˆ Ù…Ø¯ÛŒØ±ÛŒØª ØªØ±ÛŒÙ„ÛŒÙ†Ú¯ Ø§Ø³ØªØ§Ù¾
+    pub fn evaluate_open_positions(
+        &mut self,
+        symbol: &str,
+        current_bid: Decimal,
+        current_ask: Decimal,
+    ) -> Option<ClosedTradeRecord> {
+        let position = self.positions.get_mut(symbol)?;
+        if !position.is_open {
+            return None;
+        }
+
+        let now = Utc::now();
+        let hold_duration = (now - position.opened_at).num_seconds();
+        let mark_price = (if position.is_buy { current_bid } else { current_ask }).round_dp(2);
+
+        if mark_price <= dec!(0.0) {
+            return None;
+        }
+
+        // Û±. Ù‚ÙÙ„ Ø±ÛŒØ³Ú© Ø¯Ø± Ø¨Ø±ÛŒÚ©â€ŒØ§ÛŒÙˆÙ† Ù¾Ø³ Ø§Ø² Ø³ÙˆØ¯ Ø§ÙˆÙ„ÛŒÙ‡
+        if position.is_buy && mark_price >= position.entry_price * (dec!(1.0) + self.breakeven_ratio) && !position.is_breakeven_active {
+            position.stop_loss_price = (position.entry_price + (position.entry_price * self.maker_fee_ratio * dec!(2))).round_dp(2);
+            position.is_breakeven_active = true;
+            info!(symbol = %symbol, "ðŸ›¡ï¸ Breakeven Triggered: Zero-Risk Active");
+        } else if !position.is_buy && mark_price <= position.entry_price * (dec!(1.0) - self.breakeven_ratio) && !position.is_breakeven_active {
+            position.stop_loss_price = (position.entry_price - (position.entry_price * self.maker_fee_ratio * dec!(2))).round_dp(2);
+            position.is_breakeven_active = true;
+            info!(symbol = %symbol, "ðŸ›¡ï¸ Breakeven Triggered: Zero-Risk Active");
+        }
+
+        let hit_tp = if position.is_buy { mark_price >= position.take_profit_price } else { mark_price <= position.take_profit_price };
+        let hit_sl = if position.is_buy { mark_price <= position.stop_loss_price } else { mark_price >= position.stop_loss_price };
+        
+        let notional_current = mark_price * position.quantity.abs();
+        let exit_fee = notional_current * self.maker_fee_ratio;
+        let current_raw_pnl = if position.is_buy {
+            (mark_price - position.entry_price) * position.quantity.abs()
+        } else {
+            (position.entry_price - mark_price) * position.quantity.abs()
+        };
+        let current_net_pnl = current_raw_pnl - exit_fee;
+
+        // Ø³ÛŒÙˆ Ø³ÙˆØ¯ Ø³Ø±ÛŒØ¹ Ø¨Ø¹Ø¯ Ø§Ø² Û±Ûµ Ø«Ø§Ù†ÛŒÙ‡ Ø¯Ø± ØµÙˆØ±Øª Ø¯Ø§Ø´ØªÙ† Ø³ÙˆØ¯ Ø¨Ø§Ù„Ø§ÛŒ Û±Û° Ø¯Ù„Ø§Ø±
+        let early_profit_take = hold_duration >= 15 && current_net_pnl >= dec!(10.0);
+        let hit_time = hold_duration >= position.max_holding_sec;
+
+        if hit_tp || hit_sl || early_profit_take || hit_time {
+            let net_pnl = (current_raw_pnl - exit_fee).round_dp(2);
+            let notional_entry = position.entry_price * position.quantity.abs();
+            let pnl_pct = if notional_entry > dec!(0.0) {
+                let ratio = net_pnl / notional_entry;
+                ratio.to_string().parse::<f64>().unwrap_or(0.0) * 100.0
+            } else {
+                0.0
+            };
+
+            position.is_open = false;
+            self.total_margin_in_use -= position.entry_price * position.quantity.abs();
+            self.cash_balance += notional_current + net_pnl;
+
+            let total_round_trip_fee = (exit_fee + (notional_entry * self.maker_fee_ratio)).round_dp(2);
+
+            let reason = if hit_tp { 
+                "MAKER_TAKE_PROFIT ðŸŽ¯" 
+            } else if early_profit_take { 
+                "EARLY_PROFIT_HARVEST ðŸ’°" 
+            } else if hit_sl { 
+                "STOP_LOSS ðŸ›‘" 
+            } else { 
+                "TIME_EXPIRATION â±ï¸" 
+            };
+
+            let record = ClosedTradeRecord {
+                id: position.id.clone(),
+                symbol: symbol.to_string(),
+                action: if position.is_buy { "BUY".into() } else { "SELL".into() },
+                entry_price: position.entry_price,
+                exit_price: mark_price,
+                quantity: position.quantity.abs(),
+                notional_usd: notional_entry,
+                fee_paid: total_round_trip_fee,
+                net_pnl,
+                pnl_percent: (pnl_pct * 100.0).round() / 100.0,
+                duration_seconds: hold_duration,
+                exit_reason: reason.to_string(),
+                opened_at: position.opened_at.to_rfc3339(),
+                closed_at: now.to_rfc3339(),
+            };
+
+            info!(
+                symbol = %symbol,
+                reason = %reason,
+                pnl = %net_pnl,
+                held_sec = %hold_duration,
+                "ðŸ’° Trade CLOSED (Fee: $3)"
+            );
+
+            return Some(record);
+        }
+
+        None
+    }
+
+    pub fn get_cash(&self) -> Decimal {
+        self.cash_balance
+    }
+
+    pub fn get_total_equity(&self) -> Decimal {
+        self.cash_balance + self.total_margin_in_use
+    }
+}
+
+==================================================
+FILE: .\src\market_data\binance.rs
+==================================================
+// Ù…Ø³ÛŒØ±: rust_core/src/market_data/binance.rs
+use crate::config::MarketDataSettings;
+use crate::domain::types::{DepthDelta, TradeTick};
+use crate::error::{AppError, Result};
+use chrono::Utc;
+use futures_util::{SinkExt, StreamExt};
+use reqwest::Client as HttpClient;
+use serde_json::{json, Value};
+use std::time::Duration;
+use tokio::sync::mpsc;
+use tokio::time::sleep;
+use tokio_tungstenite::connect_async;
+use tokio_tungstenite::tungstenite::Message;
+use tracing::{error, info, warn};
+
+pub enum MarketEvent {
+    Trade(TradeTick),
+    Depth(DepthDelta),
+}
+
+pub struct BinanceClient {
+    settings: MarketDataSettings,
+    http_client: HttpClient,
+    event_tx: mpsc::Sender<MarketEvent>,
+}
+
+impl BinanceClient {
+    pub fn new(settings: MarketDataSettings, event_tx: mpsc::Sender<MarketEvent>) -> Self {
+        Self {
+            settings,
+            http_client: HttpClient::builder().timeout(Duration::from_secs(4)).build().unwrap_or_default(),
+            event_tx,
+        }
+    }
+
+    pub async fn fetch_snapshot(&self, symbol: &str) -> Result<(u64, Vec<(rust_decimal::Decimal, rust_decimal::Decimal)>, Vec<(rust_decimal::Decimal, rust_decimal::Decimal)>)> {
+        let url = format!("{}/v5/market/orderbook?category=spot&symbol={}&limit=50", self.settings.binance_rest_url, symbol.to_uppercase());
+        let res = self.http_client.get(&url).send().await?.json::<Value>().await?;
+
+        let result_obj = &res["result"];
+        let ts = result_obj["ts"].as_u64().unwrap_or(0);
+
+        let bids = parse_bybit_levels(&result_obj["b"])?;
+        let asks = parse_bybit_levels(&result_obj["a"])?;
+
+        Ok((ts, bids, asks))
+    }
+
+    pub async fn run_stream(&self) {
+        let ws_url = &self.settings.binance_ws_url;
+        let mut topics = Vec::new();
+        for s in &self.settings.symbols {
+            let sym = s.to_uppercase();
+            topics.push(format!("publicTrade.{}", sym));
+            topics.push(format!("orderbook.50.{}", sym));
+        }
+
+        loop {
+            info!("Connecting to Bybit WebSocket: {}", ws_url);
+            match connect_async(ws_url).await {
+                Ok((mut ws_stream, _)) => {
+                    info!("Successfully connected to Bybit WebSocket.");
+
+                    let sub_msg = json!({
+                        "op": "subscribe",
+                        "args": topics
+                    }).to_string();
+
+                    if let Err(e) = ws_stream.send(Message::Text(sub_msg)).await {
+                        error!("Failed to send subscription: {}", e);
+                        continue;
+                    }
+
+                    while let Some(msg) = ws_stream.next().await {
+                        let received_ts = Utc::now();
+                        match msg {
+                            Ok(Message::Text(text)) => {
+                                if let Ok(val) = serde_json::from_str::<Value>(&text) {
+                                    if let Some(topic) = val.get("topic").and_then(|t| t.as_str()) {
+                                        if topic.starts_with("publicTrade") {
+                                            if let Some(data_arr) = val.get("data").and_then(|d| d.as_array()) {
+                                                for item in data_arr {
+                                                    if let Ok(trade) = parse_bybit_trade(item, received_ts) {
+                                                        let _ = self.event_tx.send(MarketEvent::Trade(trade)).await;
+                                                    }
+                                                }
+                                            }
+                                        } else if topic.starts_with("orderbook") {
+                                            if let Ok(delta) = parse_bybit_depth(&val, received_ts) {
+                                                let _ = self.event_tx.send(MarketEvent::Depth(delta)).await;
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            Ok(Message::Ping(p)) => {
+                                let _ = ws_stream.send(Message::Pong(p)).await;
+                            }
+                            Ok(Message::Close(_)) => {
+                                warn!("WebSocket server closed connection. Reconnecting...");
+                                break;
+                            }
+                            Err(e) => {
+                                error!("WebSocket read error: {}. Reconnecting...", e);
+                                break;
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+                Err(e) => {
+                    error!("WebSocket connection failed: {}. Retrying...", e);
+                }
+            }
+            sleep(Duration::from_millis(self.settings.reconnect_interval_ms)).await;
+        }
+    }
+}
+
+fn parse_bybit_levels(val: &Value) -> Result<Vec<(rust_decimal::Decimal, rust_decimal::Decimal)>> {
+    let mut levels = Vec::new();
+    if let Some(arr) = val.as_array() {
+        for item in arr {
+            if let (Some(p_str), Some(q_str)) = (item[0].as_str(), item[1].as_str()) {
+                if let (Ok(p), Ok(q)) = (p_str.parse(), q_str.parse()) {
+                    levels.push((p, q));
+                }
+            }
+        }
+    }
+    Ok(levels)
+}
+
+fn parse_bybit_trade(val: &Value, received_ts: chrono::DateTime<Utc>) -> Result<TradeTick> {
+    let symbol = val["s"].as_str().unwrap_or("BTCUSDT").to_string();
+    let price = val["p"].as_str().and_then(|p| p.parse().ok()).unwrap_or_default();
+    let quantity = val["v"].as_str().and_then(|v| v.parse().ok()).unwrap_or_default();
+    let side = val["S"].as_str().unwrap_or("");
+    let is_buyer_maker = side == "Sell";
+
+    Ok(TradeTick {
+        symbol,
+        trade_id: val["i"].as_str().and_then(|s| s.parse().ok()).unwrap_or(0),
+        price,
+        quantity,
+        is_buyer_maker,
+        exchange_ts: received_ts,
+        received_ts,
+    })
+}
+
+fn parse_bybit_depth(val: &Value, received_ts: chrono::DateTime<Utc>) -> Result<DepthDelta> {
+    let symbol = val["s"].as_str().unwrap_or("BTCUSDT").to_string();
+    let data = &val["data"];
+    let update_id = data["u"].as_u64().unwrap_or(0);
+
+    let bids = parse_bybit_levels(&data["b"])?;
+    let asks = parse_bybit_levels(&data["a"])?;
+
+    Ok(DepthDelta {
+        symbol,
+        first_update_id: update_id,
+        final_update_id: update_id,
+        bids,
+        asks,
+        exchange_ts: received_ts,
+        received_ts,
+    })
+}
+
+==================================================
+FILE: .\src\market_data\mod.rs
+==================================================
+pub mod binance;
+pub mod normalizer;
+
+==================================================
+FILE: .\src\market_data\normalizer.rs
+==================================================
+use crate::domain::types::{DepthDelta, TradeTick};
+use crate::error::{AppError, Result};
+use chrono::{DateTime, TimeZone, Utc};
+use rust_decimal::Decimal;
+use serde_json::Value;
+use std::str::FromStr;
+
+pub struct BinanceNormalizer;
+
+impl BinanceNormalizer {
+    pub fn parse_trade(val: &Value, received_ts: DateTime<Utc>) -> Result<TradeTick> {
+        let symbol = val["s"].as_str().ok_or_else(|| AppError::Protocol("Missing s field".into()))?.to_string();
+        let trade_id = val["t"].as_u64().ok_or_else(|| AppError::Protocol("Missing t field".into()))?;
+        
+        let price_str = val["p"].as_str().ok_or_else(|| AppError::Protocol("Missing p field".into()))?;
+        let price = Decimal::from_str(price_str).map_err(|e| AppError::Protocol(format!("Invalid price: {}", e)))?;
+
+        let qty_str = val["q"].as_str().ok_or_else(|| AppError::Protocol("Missing q field".into()))?;
+        let quantity = Decimal::from_str(qty_str).map_err(|e| AppError::Protocol(format!("Invalid quantity: {}", e)))?;
+
+        let is_buyer_maker = val["m"].as_bool().unwrap_or(false);
+        let time_millis = val["T"].as_i64().ok_or_else(|| AppError::Protocol("Missing T field".into()))?;
+        let exchange_ts = Utc.timestamp_millis_opt(time_millis).single()
+            .unwrap_or(received_ts);
+
+        Ok(TradeTick {
+            symbol,
+            trade_id,
+            price,
+            quantity,
+            is_buyer_maker,
+            exchange_ts,
+            received_ts,
+        })
+    }
+
+    pub fn parse_depth_delta(val: &Value, received_ts: DateTime<Utc>) -> Result<DepthDelta> {
+        let symbol = val["s"].as_str().ok_or_else(|| AppError::Protocol("Missing s in depth".into()))?.to_string();
+        let first_update_id = val["U"].as_u64().ok_or_else(|| AppError::Protocol("Missing U in depth".into()))?;
+        let final_update_id = val["u"].as_u64().ok_or_else(|| AppError::Protocol("Missing u in depth".into()))?;
+        
+        let time_millis = val["E"].as_i64().unwrap_or(received_ts.timestamp_millis());
+        let exchange_ts = Utc.timestamp_millis_opt(time_millis).single().unwrap_or(received_ts);
+
+        let bids = Self::parse_levels(&val["b"])?;
+        let asks = Self::parse_levels(&val["a"])?;
+
+        Ok(DepthDelta {
+            symbol,
+            first_update_id,
+            final_update_id,
+            bids,
+            asks,
+            exchange_ts,
+            received_ts,
+        })
+    }
+
+    pub fn parse_levels(val: &Value) -> Result<Vec<(Decimal, Decimal)>> {
+        let mut levels = Vec::new();
+        if let Some(arr) = val.as_array() {
+            for item in arr {
+                if let (Some(p_str), Some(q_str)) = (item[0].as_str(), item[1].as_str()) {
+                    let p = Decimal::from_str(p_str).map_err(|e| AppError::Protocol(e.to_string()))?;
+                    let q = Decimal::from_str(q_str).map_err(|e| AppError::Protocol(e.to_string()))?;
+                    levels.push((p, q));
+                }
+            }
+        }
+        Ok(levels)
+    }
+}
+
+==================================================
+FILE: .\src\risk\engine.rs
+==================================================
+use crate::domain::portfolio::{SignalAction, SignalCandidate};
+use rust_decimal::Decimal;
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RiskConfig {
+    pub max_position_size: Decimal,
+    pub max_open_positions: usize,
+    pub max_daily_loss: Decimal,
+    pub max_spread_bps: f64,
+    pub kill_switch_active: bool,
+}
+
+pub enum RiskCheckResult {
+    Approved { size: Decimal },
+    Rejected { reason: String },
+}
+
+pub struct RiskEngine {
+    config: RiskConfig,
+    current_daily_pnl: Decimal,
+    open_positions_count: usize,
+}
+
+impl RiskEngine {
+    pub fn new(config: RiskConfig) -> Self {
+        Self {
+            config,
+            current_daily_pnl: Decimal::ZERO,
+            open_positions_count: 0,
+        }
+    }
+
+    /// Ø¨Ù‡â€ŒØ±ÙˆØ²Ø±Ø³Ø§Ù†ÛŒ ÙˆØ¶Ø¹ÛŒØª Ø³ÙˆØ¯ Ùˆ Ø²ÛŒØ§Ù† Ø±ÙˆØ²Ø§Ù†Ù‡ Ùˆ ØªØ¹Ø¯Ø§Ø¯ Ù¾ÙˆØ²ÛŒØ´Ù†â€ŒÙ‡Ø§
+    pub fn update_state(&mut self, daily_pnl: Decimal, open_count: usize) {
+        self.current_daily_pnl = daily_pnl;
+        self.open_positions_count = open_count;
+    }
+
+    /// Ø§Ø±Ø²ÛŒØ§Ø¨ÛŒ Ù†Ù‡Ø§ÛŒÛŒ Ø³ÛŒÚ¯Ù†Ø§Ù„ ØªÙˆØ³Ø· Ù…ÙˆØªÙˆØ± Ø±ÛŒØ³Ú© Ù‚Ø¨Ù„ Ø§Ø² Ø§Ø¬Ø±Ø§
+    pub fn validate_signal(
+        &self,
+        signal: &SignalCandidate,
+        current_spread_bps: f64,
+    ) -> RiskCheckResult {
+        // 1. Kill-Switch Check
+        if self.config.kill_switch_active {
+            return RiskCheckResult::Rejected {
+                reason: "KILL_SWITCH_ACTIVE".into(),
+            };
+        }
+
+        // 2. Daily Loss Limit Check
+        if self.current_daily_pnl <= -self.config.max_daily_loss {
+            return RiskCheckResult::Rejected {
+                reason: "MAX_DAILY_LOSS_EXCEEDED".into(),
+            };
+        }
+
+        // 3. No Trade Action Check
+        if signal.action == SignalAction::NoTrade || signal.action == SignalAction::Hold {
+            return RiskCheckResult::Rejected {
+                reason: "SIGNAL_IS_NO_TRADE".into(),
+            };
+        }
+
+        // 4. Spread Friction Check
+        if current_spread_bps > self.config.max_spread_bps {
+            return RiskCheckResult::Rejected {
+                reason: "EXCESSIVE_SPREAD_RISK".into(),
+            };
+        }
+
+        // 5. Max Open Positions Check
+        if self.open_positions_count >= self.config.max_open_positions {
+            return RiskCheckResult::Rejected {
+                reason: "MAX_OPEN_POSITIONS_REACHED".into(),
+            };
+        }
+
+        // All checks passed. Approve base position size.
+        RiskCheckResult::Approved {
+            size: self.config.max_position_size,
+        }
+    }
+}
+
+==================================================
+FILE: .\src\risk\lib.rs
+==================================================
+pub mod config;
+pub mod domain;
+pub mod error;
+pub mod market_data;
+pub mod storage;
+pub mod signal;
+pub mod risk; // <--- Ø§ÛŒÙ† Ø®Ø· Ø§Ø¶Ø§ÙÙ‡ Ø´ÙˆØ¯
+
+==================================================
+FILE: .\src\risk\mod.rs
+==================================================
+pub mod engine;
+
+==================================================
+FILE: .\src\signal\engine.rs
+==================================================
+use crate::domain::portfolio::{SignalAction, SignalCandidate};
+use crate::domain::types::OrderBookMetrics;
+use chrono::Utc;
+use uuid::Uuid;
+
+pub struct SignalEngine {
+    min_confidence: f64,
+    max_spread_bps: f64,
+}
+
+impl SignalEngine {
+    pub fn new(min_confidence: f64, max_spread_bps: f64) -> Self {
+        Self {
+            min_confidence,
+            max_spread_bps,
+        }
+    }
+
+    /// Ø§Ø±Ø²ÛŒØ§Ø¨ÛŒ ØªØ±Ú©ÛŒØ¨ Ø®Ø¨Ø± Ùˆ ÙˆØ¶Ø¹ÛŒØª Ø§Ø±Ø¯Ø± Ø¨ÙˆÚ© Ø¨Ø±Ø§ÛŒ ØªÙˆÙ„ÛŒØ¯ Ø³ÛŒÚ¯Ù†Ø§Ù„
+    pub fn evaluate_signal(
+        &self,
+        symbol: &str,
+        metrics: &OrderBookMetrics,
+        news_relevance: f64,
+        is_positive_news: bool,
+    ) -> SignalCandidate {
+        let mut reason_codes = Vec::new();
+
+        // 1. Check Spread Friction
+        if metrics.spread_bps > self.max_spread_bps {
+            reason_codes.push("HIGH_SPREAD_NO_TRADE".to_string());
+            return self.no_trade_signal(symbol, reason_codes);
+        }
+
+        // 2. Check Order Flow Imbalance (OFI) confirmation
+        let ofi_confirmed = if is_positive_news {
+            metrics.imbalance_top10 > 0.15
+        } else {
+            metrics.imbalance_top10 < -0.15
+        };
+
+        if !ofi_confirmed {
+            reason_codes.push("MICROSTRUCTURE_MISMATCH".to_string());
+            return self.no_trade_signal(symbol, reason_codes);
+        }
+
+        // 3. Evaluate Confidence
+        let confidence = (news_relevance + metrics.imbalance_top10.abs()) / 2.0;
+        if confidence < self.min_confidence {
+            reason_codes.push("LOW_CONFIDENCE".to_string());
+            return self.no_trade_signal(symbol, reason_codes);
+        }
+
+        // 4. Generate Trade Action
+        let action = if is_positive_news {
+            reason_codes.push("POSITIVE_NEWS_WITH_OFI_BULLISH".to_string());
+            SignalAction::Buy
+        } else {
+            reason_codes.push("NEGATIVE_NEWS_WITH_OFI_BEARISH".to_string());
+            SignalAction::Sell
+        };
+
+        SignalCandidate {
+            signal_id: Uuid::new_v4().to_string(), // Ø§ØµÙ„Ø§Ø­ Ø´Ø¯Ù‡ Ø§Ø² toString Ø¨Ù‡ to_string
+            event_id: None,
+            symbol: symbol.to_string(),
+            action,
+            confidence,
+            expected_horizon_sec: 60,
+            expected_return: 0.003,
+            decision_ts: Utc::now(),
+            reason_codes,
+        }
+    }
+
+    fn no_trade_signal(&self, symbol: &str, reason_codes: Vec<String>) -> SignalCandidate {
+        SignalCandidate {
+            signal_id: Uuid::new_v4().to_string(), // Ø§ØµÙ„Ø§Ø­ Ø´Ø¯Ù‡ Ø§Ø² toString Ø¨Ù‡ to_string
+            event_id: None,
+            symbol: symbol.to_string(),
+            action: SignalAction::NoTrade,
+            confidence: 0.0,
+            expected_horizon_sec: 0,
+            expected_return: 0.0,
+            decision_ts: Utc::now(),
+            reason_codes,
+        }
+    }
+}
+
+==================================================
+FILE: .\src\signal\mod.rs
+==================================================
+pub mod engine;
+
+==================================================
+FILE: .\src\storage\mod.rs
+==================================================
+pub mod postgres;
+pub mod redis;
+
+==================================================
+FILE: .\src\storage\postgres.rs
+==================================================
+use crate::domain::types::{OrderBookMetrics, TradeTick};
+use crate::error::Result;
+use sqlx::postgres::PgPoolOptions;
+use sqlx::PgPool;
+
+#[derive(Clone)]
+pub struct PostgresStore {
+    pool: PgPool,
+}
+
+impl PostgresStore {
+ pub async fn new(database_url: &str) -> Result<Self> {
+        tracing::info!("Attempting to connect to PostgreSQL with URL: {}", database_url);
+        let pool = PgPoolOptions::new()
+            .max_connections(10)
+            .connect(database_url)
+            .await?;
+        Ok(Self { pool })
+    }
+
+    pub async fn insert_tick(&self, tick: &TradeTick) -> Result<()> {
+        sqlx::query(
+            r#"
+            INSERT INTO market_ticks (symbol, price, quantity, is_buyer_maker, exchange_ts, received_ts)
+            VALUES ($1, $2, $3, $4, $5, $6)
+            "#,
+        )
+        .bind(&tick.symbol)
+        .bind(&tick.price)
+        .bind(&tick.quantity)
+        .bind(&tick.is_buyer_maker)
+        .bind(&tick.exchange_ts)
+        .bind(&tick.received_ts)
+        .execute(&self.pool)
+        .await?;
+
+        Ok(())
+    }
+
+    pub async fn insert_metrics(&self, metrics: &OrderBookMetrics) -> Result<()> {
+        sqlx::query(
+            r#"
+            INSERT INTO orderbook_metrics (symbol, bid_price, ask_price, spread_bps, mid_price, micro_price, imbalance, snapshot_ts)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+            "#,
+        )
+        .bind(&metrics.symbol)
+        .bind(&metrics.best_bid)
+        .bind(&metrics.best_ask)
+        .bind(&metrics.spread_bps)
+        .bind(&metrics.mid_price)
+        .bind(&metrics.micro_price)
+        .bind(&metrics.imbalance_top10)
+        .bind(&metrics.timestamp)
+        .execute(&self.pool)
+        .await?;
+
+        Ok(())
+    }
+}
+
+==================================================
+FILE: .\src\storage\redis.rs
+==================================================
+// Ù…Ø³ÛŒØ±: rust_core/src/storage/redis.rs
+use crate::domain::types::{OrderBookMetrics, TradeTick};
+use crate::error::Result;
+use redis::aio::ConnectionManager;
+use redis::AsyncCommands;
+use serde_json::Value;
+
+#[derive(Clone)]
+pub struct RedisPublisher {
+    pub conn: ConnectionManager,
+}
+
+impl RedisPublisher {
+    pub async fn new(redis_url: &str) -> Result<Self> {
+        let client = redis::Client::open(redis_url)?;
+        let conn = ConnectionManager::new(client).await?;
+        Ok(Self { conn })
+    }
+
+    pub async fn publish_trade(&mut self, trade: &TradeTick) -> Result<()> {
+        let payload = serde_json::to_string(trade)?;
+        let channel = format!("market:trades:{}", trade.symbol.to_lowercase());
+        let _: () = self.conn.publish(channel, payload).await?;
+        Ok(())
+    }
+
+    pub async fn publish_metrics(&mut self, metrics: &OrderBookMetrics) -> Result<()> {
+        let payload = serde_json::to_string(metrics)?;
+        let channel = format!("market:metrics:{}", metrics.symbol.to_lowercase());
+        let _: () = self.conn.publish(channel, payload).await?;
+        Ok(())
+    }
+
+    pub async fn publish_json(&mut self, channel: &str, payload: &Value) -> Result<()> {
+        let payload_str = serde_json::to_string(payload)?;
+        let _: () = self.conn.publish(channel, payload_str).await?;
+        Ok(())
+    }
+}
+
+==================================================
+FILE: .\tests\analytics_tests.rs
+==================================================
+use rust_core::analytics::regime::{MarketRegime, RegimeDetector};
+use rust_core::analytics::cross_asset::CrossAssetAnalyzer;
+use rust_core::analytics::reliability::SourceReliabilityRegistry;
+
+#[test]
+fn test_market_regime_detection() {
+    let detector = RegimeDetector::new(0.02); // 2% vol threshold
+    
+    let bullish_returns = vec![0.005, 0.006, 0.004, 0.007];
+    let regime = detector.detect_regime(&bullish_returns, 1.2);
+    
+    assert_eq!(regime, MarketRegime::BullishTrend);
+}
+
+#[test]
+fn test_cross_asset_lead_lag() {
+    let leader = vec![0.01, 0.02, -0.01, 0.005, 0.03];
+    let follower = vec![0.0, 0.01, 0.02, -0.01, 0.005];
+
+    let (lag, corr) = CrossAssetAnalyzer::compute_lead_lag(&leader, &follower, 2);
+    
+    assert_eq!(lag, 1);
+    assert!(corr > 0.5);
+}
+
+#[test]
+fn test_source_reliability_registry() {
+    let mut registry = SourceReliabilityRegistry::new();
+    
+    let reuters_score = registry.get_score("reuters.com");
+    assert_eq!(reuters_score, 0.95);
+
+    let unknown_score = registry.get_score("unknown-blog.xyz");
+    assert_eq!(unknown_score, 0.5);
+}
+
+==================================================
+FILE: .\tests\backtest_tests.rs
+==================================================
+use chrono::Utc;
+use rust_decimal::Decimal; // <--- Ø§ÛŒÙ…Ù¾ÙˆØ±Øª Decimal Ø¨Ø±Ø§ÛŒ ÙØ§ÛŒÙ„ ØªØ³Øª
+use rust_decimal_macros::dec;
+use rust_core::backtest::engine::{BacktestConfig, EventDrivenBacktester};
+
+#[test]
+fn test_backtester_simulation_and_metrics() {
+    let config = BacktestConfig {
+        initial_capital: dec!(100000.0),
+        maker_fee_bps: 2.0,
+        taker_fee_bps: 5.0,
+        simulated_latency_ms: 10,
+    };
+
+    let mut backtester = EventDrivenBacktester::new(config);
+
+    let now = Utc::now();
+    // Ø´Ø¨ÛŒÙ‡â€ŒØ³Ø§Ø²ÛŒ Ø¯Ùˆ Ù…Ø¹Ø§Ù…Ù„Ù‡ (ÛŒÚ©ÛŒ Ø³ÙˆØ¯Ø¯Ù‡ØŒ ÛŒÚ©ÛŒ Ø²ÛŒØ§Ù†â€ŒØ¯Ù‡)
+    backtester.execute_simulated_trade(
+        "BTCUSDT",
+        true,
+        dec!(60000.0),
+        dec!(61000.0),
+        dec!(1.0),
+        now,
+        now,
+    );
+
+    backtester.execute_simulated_trade(
+        "BTCUSDT",
+        true,
+        dec!(61000.0),
+        dec!(60500.0),
+        dec!(1.0),
+        now,
+        now,
+    );
+
+    let report = backtester.generate_performance_report();
+
+    assert_eq!(report.total_trades, 2);
+    assert_eq!(report.winning_trades, 1);
+    assert_eq!(report.losing_trades, 1);
+    assert_eq!(report.win_rate, 0.5);
+    assert!(report.net_pnl != Decimal::ZERO);
+}
+
+==================================================
+FILE: .\tests\book_tests.rs
+==================================================
+use chrono::Utc;
+use rust_decimal_macros::dec;
+use rust_core::domain::book::OrderBook;
+use rust_core::domain::types::DepthDelta;
+
+#[test]
+fn test_orderbook_snapshot_and_sorting() {
+    let mut book = OrderBook::new("BTCUSDT".into());
+    
+    let bids = vec![
+        (dec!(65000.0), dec!(1.5)),
+        (dec!(65010.0), dec!(2.0)),
+        (dec!(64990.0), dec!(5.0)),
+    ];
+    let asks = vec![
+        (dec!(65020.0), dec!(1.0)),
+        (dec!(65030.0), dec!(3.0)),
+    ];
+
+    book.apply_snapshot(100, bids, asks);
+
+    let (best_bid_p, _) = book.best_bid().unwrap();
+    let (best_ask_p, _) = book.best_ask().unwrap();
+
+    assert_eq!(best_bid_p, dec!(65010.0));
+    assert_eq!(best_ask_p, dec!(65020.0));
+}
+
+#[test]
+fn test_orderbook_delta_update_and_metrics() {
+    let mut book = OrderBook::new("BTCUSDT".into());
+    book.apply_snapshot(100, vec![(dec!(100.0), dec!(1.0))], vec![(dec!(102.0), dec!(1.0))]);
+
+    let delta = DepthDelta {
+        symbol: "BTCUSDT".into(),
+        first_update_id: 101,
+        final_update_id: 101,
+        bids: vec![(dec!(101.0), dec!(2.0))],
+        asks: vec![(dec!(102.0), dec!(0.0)), (dec!(103.0), dec!(1.0))],
+        exchange_ts: Utc::now(),
+        received_ts: Utc::now(),
+    };
+
+    let res = book.apply_delta(&delta);
+    assert!(res.is_ok());
+
+    let metrics = book.compute_metrics().unwrap();
+    assert_eq!(metrics.mid_price, dec!(102.0));
+}
+
+#[test]
+fn test_orderbook_sequence_gap_detection() {
+    let mut book = OrderBook::new("BTCUSDT".into());
+    book.apply_snapshot(100, vec![(dec!(100.0), dec!(1.0))], vec![(dec!(102.0), dec!(1.0))]);
+
+    let delta = DepthDelta {
+        symbol: "BTCUSDT".into(),
+        first_update_id: 105, // Gap! Expected 101
+        final_update_id: 106,
+        bids: vec![],
+        asks: vec![],
+        exchange_ts: Utc::now(),
+        received_ts: Utc::now(),
+    };
+
+    let res = book.apply_delta(&delta);
+    assert!(res.is_err());
+}
+
+==================================================
+FILE: .\tests\event_audit_tests.rs
+==================================================
+use chrono::Utc;
+use rust_core::domain::events::{NewsEvent, TimeAudit};
+
+#[test]
+fn test_time_audit_look_ahead_prevention() {
+    let now = Utc::now();
+    let past = now - chrono::Duration::seconds(10);
+
+    let audit = TimeAudit {
+        source_ts: past,
+        received_ts: past + chrono::Duration::milliseconds(100),
+        processed_ts: past + chrono::Duration::milliseconds(500),
+        available_ts: past + chrono::Duration::milliseconds(600),
+    };
+
+    assert!(audit.available_ts >= audit.source_ts);
+    assert!(audit.processed_ts >= audit.received_ts);
+}
+
+==================================================
+FILE: .\tests\risk_tests.rs
+==================================================
+use chrono::Utc;
+use rust_decimal_macros::dec;
+use rust_core::domain::portfolio::{SignalAction, SignalCandidate};
+use rust_core::risk::engine::{RiskConfig, RiskEngine, RiskCheckResult};
+
+#[test]
+fn test_risk_engine_approval() {
+    let config = RiskConfig {
+        max_position_size: dec!(1000.0),
+        max_open_positions: 3,
+        max_daily_loss: dec!(500.0),
+        max_spread_bps: 4.0,
+        kill_switch_active: false,
+    };
+
+    let mut engine = RiskEngine::new(config);
+    engine.update_state(dec!(0.0), 1); // 1 open position, 0 loss
+
+    let signal = SignalCandidate {
+        signal_id: "test-sig-1".into(),
+        event_id: None,
+        symbol: "BTCUSDT".into(),
+        action: SignalAction::Buy,
+        confidence: 0.85,
+        expected_horizon_sec: 60,
+        expected_return: 0.004,
+        decision_ts: Utc::now(),
+        reason_codes: vec!["BULLISH".into()],
+    };
+
+    let result = engine.validate_signal(&signal, 1.5); // spread 1.5 bps
+
+    match result {
+        RiskCheckResult::Approved { size } => {
+            assert_eq!(size, dec!(1000.0));
+        }
+        RiskCheckResult::Rejected { reason } => {
+            panic!("Expected approval, but got rejection: {}", reason);
+        }
+    }
+}
+
+#[test]
+fn test_risk_engine_kill_switch() {
+    let config = RiskConfig {
+        max_position_size: dec!(1000.0),
+        max_open_positions: 3,
+        max_daily_loss: dec!(500.0),
+        max_spread_bps: 4.0,
+        kill_switch_active: true, // KILL SWITCH ON
+    };
+
+    let engine = RiskEngine::new(config);
+    let signal = SignalCandidate {
+        signal_id: "test-sig-2".into(),
+        event_id: None,
+        symbol: "BTCUSDT".into(),
+        action: SignalAction::Buy,
+        confidence: 0.9,
+        expected_horizon_sec: 60,
+        expected_return: 0.004,
+        decision_ts: Utc::now(),
+        reason_codes: vec![],
+    };
+
+    let result = engine.validate_signal(&signal, 1.0);
+
+    match result {
+        RiskCheckResult::Approved { .. } => {
+            panic!("Expected rejection due to kill switch!");
+        }
+        RiskCheckResult::Rejected { reason } => {
+            assert_eq!(reason, "KILL_SWITCH_ACTIVE");
+        }
+    }
+}
+
+==================================================
+FILE: .\tests\signal_tests.rs
+==================================================
+use chrono::Utc;
+use rust_decimal_macros::dec;
+use rust_core::domain::portfolio::SignalAction;
+use rust_core::domain::types::OrderBookMetrics;
+use rust_core::signal::engine::SignalEngine;
+
+#[test]
+fn test_signal_generation_buy() {
+    let engine = SignalEngine::new(0.6, 5.0); // min_conf: 0.6, max_spread: 5.0 bps
+
+    let metrics = OrderBookMetrics {
+        symbol: "BTCUSDT".into(),
+        best_bid: dec!(65000.0),
+        best_ask: dec!(65001.0),
+        spread_bps: 0.15, // Very tight spread
+        mid_price: dec!(65000.5),
+        micro_price: dec!(65000.8),
+        imbalance_top10: 0.45, // Strong bullish order flow
+        timestamp: Utc::now(),
+    };
+
+    // Evaluate positive news
+    let signal = engine.evaluate_signal("BTCUSDT", &metrics, 0.85, true);
+
+    assert_eq!(signal.action, SignalAction::Buy);
+    assert!(signal.confidence >= 0.6);
+}
+
+#[test]
+fn test_signal_generation_no_trade_due_to_spread() {
+    let engine = SignalEngine::new(0.6, 2.0); // max_spread: 2.0 bps
+
+    let metrics = OrderBookMetrics {
+        symbol: "BTCUSDT".into(),
+        best_bid: dec!(65000.0),
+        best_ask: dec!(65020.0),
+        spread_bps: 3.5, // Spread too wide!
+        mid_price: dec!(65010.0),
+        micro_price: dec!(65010.0),
+        imbalance_top10: 0.5,
+        timestamp: Utc::now(),
+    };
+
+    let signal = engine.evaluate_signal("BTCUSDT", &metrics, 0.85, true);
+
+    assert_eq!(signal.action, SignalAction::NoTrade);
+    assert!(signal.reason_codes.contains(&"HIGH_SPREAD_NO_TRADE".to_string()));
+}

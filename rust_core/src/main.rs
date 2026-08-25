@@ -19,7 +19,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let subscriber = FmtSubscriber::builder().with_max_level(Level::INFO).finish();
     tracing::subscriber::set_global_default(subscriber)?;
 
-    info!("Starting MI-EDTE Bidirectional Scalping Core with Floating PnL Tracker...");
+    info!("Starting MI-EDTE Passive Maker & Volatility-Gated Scalp Engine...");
 
     let settings = Settings::new()?;
     let mut redis_pub = RedisPublisher::new(&settings.storage.redis_url).await.ok();
@@ -46,14 +46,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let executor_clone_signal = scalp_executor.clone();
     let books_clone_signal = order_books.clone();
     let prices_clone_signal = last_known_prices.clone();
-    let redis_pub_for_signal = redis_pub.clone();
     let notional_budget = settings.trading.notional_per_trade;
 
+    // لیسنر دریافت سیگنال و کاشت اردر میکر (Post-Only Limit Order)
     tokio::spawn(async move {
         if let Ok(client) = redis::Client::open(redis_url_sub.as_str()) {
             if let Ok(mut pubsub) = client.get_async_pubsub().await {
                 let _ = pubsub.subscribe("market:scalp_signals").await;
-                info!("Rust Core subscribed to 'market:scalp_signals' from AI Engine.");
+                info!("Subscribed to AI Maker scalp signals.");
 
                 use futures_util::StreamExt;
                 let mut stream = pubsub.on_message();
@@ -63,7 +63,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     if let Ok(val) = serde_json::from_str::<Value>(&payload) {
                         let symbol = val["symbol"].as_str().unwrap_or("BTCUSDT");
                         let action = val["action"].as_str().unwrap_or("BUY");
-                        let prob = val["probability"].as_f64().unwrap_or(0.60);
                         let is_buy = action == "BUY";
 
                         let live_price = {
@@ -92,31 +91,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             continue;
                         };
 
-                        let exec_price = (if is_buy { metrics.best_ask } else { metrics.best_bid }).round_dp(2);
-                        let size = (notional_budget / exec_price).round_dp(4);
+                        let limit_price = if is_buy { metrics.best_bid } else { metrics.best_ask };
+                        let size = (notional_budget / limit_price).round_dp(4);
 
                         let mut executor = executor_clone_signal.lock().await;
-                        if let Some(pos) = executor.try_open_scalp(symbol, is_buy, size, &metrics, prob) {
-                            info!(id = %pos.id, symbol = %symbol, action = %action, entry = %pos.entry_price, size = %size, "🎯 Position OPENED");
-                            
-                            if let Some(mut r) = redis_pub_for_signal.clone() {
-                                let pos_event = serde_json::json!({
-                                    "symbol": symbol,
-                                    "action": action,
-                                    "entry_price": pos.entry_price,
-                                    "pnl": 0.0
-                                });
-                                let _ = r.publish_json("market:positions", &pos_event).await;
-                            }
-                        }
+                        let _ = executor.place_maker_order(symbol, is_buy, size, &metrics);
                     }
                 }
             }
         }
     });
 
-    let mut last_pnl_log_time = std::time::Instant::now();
-
+    // حلقه تیک‌ها و ارزیابی پر شدن اردرهای میکر و بستن سودها
     while let Some(event) = event_rx.recv().await {
         match event {
             MarketEvent::Trade(trade) => {
@@ -127,25 +113,36 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
 
                 let mut executor = scalp_executor.lock().await;
-                
-                // ارزیابی بسته شدن معامله
-                if let Some(pnl) = executor.evaluate_open_positions(&trade.symbol, trade.price, trade.price) {
+
+                // ۱. بررسی پر شدن اردرهای لیمیت کاشته‌شده
+                if let Some(pos) = executor.process_pending_orders_and_fills(&trade.symbol, trade.price) {
                     if let Some(mut r) = redis_pub.clone() {
-                        let close_event = serde_json::json!({
+                        let pos_event = serde_json::json!({
                             "symbol": trade.symbol,
+                            "action": if pos.is_buy { "BUY" } else { "SELL" },
+                            "entry_price": pos.entry_price,
+                            "pnl": 0.0
+                        });
+                        let _ = r.publish_json("market:positions", &pos_event).await;
+                    }
+                }
+                
+                // ۲. ارزیابی خروج و ثبت در دفتر کل رسمی
+                if let Some(record) = executor.evaluate_open_positions(&trade.symbol, trade.price, trade.price) {
+                    if let Some(mut r) = redis_pub.clone() {
+                        let record_json = serde_json::to_value(&record).unwrap_or_default();
+                        let _ = r.publish_json("market:trade_ledger", &record_json).await;
+
+                        let close_event = serde_json::json!({
+                            "symbol": record.symbol,
                             "action": "CLOSE",
-                            "entry_price": trade.price,
-                            "exit_price": trade.price,
-                            "pnl": pnl
+                            "entry_price": record.entry_price,
+                            "exit_price": record.exit_price,
+                            "pnl": record.net_pnl,
+                            "reason": record.exit_reason
                         });
                         let _ = r.publish_json("market:positions", &close_event).await;
                     }
-                }
-
-                // چاپ دوره‌ای وضعیت زنده پورتفوی
-                if last_pnl_log_time.elapsed().as_secs() >= 8 {
-                    last_pnl_log_time = std::time::Instant::now();
-                    info!(balance = %executor.get_cash(), "💼 Paper Portfolio Balance Updated");
                 }
             }
             MarketEvent::Depth(delta) => {
