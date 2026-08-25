@@ -1,0 +1,34 @@
+use chrono::{Duration, Utc};
+use rust_decimal_macros::dec;
+use rust_core::domain::types::OrderBookMetrics;
+use rust_core::execution::HighFrequencyScalpExecutor;
+
+#[test]
+fn test_scalp_take_profit_and_time_barrier() {
+    let mut executor = HighFrequencyScalpExecutor::new(dec!(100000.0));
+
+    let metrics = OrderBookMetrics {
+        symbol: "BTCUSDT".into(),
+        best_bid: dec!(65000.0),
+        best_ask: dec!(65001.0),
+        spread_bps: 0.15,
+        mid_price: dec!(65000.5),
+        micro_price: dec!(65000.8),
+        imbalance_top10: 0.35, // Bullish OFI
+        timestamp: Utc::now(),
+    };
+
+    // ۱. ورود به پوزیشن Long
+    let pos = executor.try_open_scalp("BTCUSDT", true, dec!(1.0), &metrics, 0.82);
+    assert!(pos.is_some());
+    let opened = pos.unwrap();
+    assert_eq!(opened.entry_price, dec!(65001.0));
+
+    // ۲. بررسی رسیدن به تارگت سود (+0.20%)
+    let target_bid = dec!(65140.0); // بالاتر از TP
+    let pnl = executor.evaluate_open_positions("BTCUSDT", target_bid, dec!(65141.0));
+    
+    assert!(pnl.is_some());
+    assert!(pnl.unwrap() > dec!(0.0)); // سود مثبت محقق شد
+    assert!(executor.get_cash() > dec!(100000.0));
+}

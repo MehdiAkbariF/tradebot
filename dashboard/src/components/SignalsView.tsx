@@ -1,96 +1,73 @@
+// مسیر: dashboard/src/components/SignalsView.tsx
 'use client';
 
-import { useEffect, useState } from 'react';
-import { ShieldCheck, TrendingUp, AlertCircle } from 'lucide-react';
+import { ShieldCheck, Zap } from 'lucide-react';
+import { ScalpSignal } from '../hooks/useLiveTerminal';
 
-interface SignalItem {
-  symbol: string;
-  action: string;
-  confidence: number;
-  reason_codes: string[];
-  decision_ts: string;
+interface Props {
+  signals: ScalpSignal[];
+  cashBalance: number;
+  totalPnL: number;
 }
 
-export default function SignalsView() {
-  const [signals, setSignals] = useState<SignalItem[]>([]);
-  const [paperStats, setPaperStats] = useState({
-    cash: 100000.0,
-    pnl: 0.0,
-    openPositions: 0
-  });
-
-  useEffect(() => {
-    const ws = new WebSocket('ws://localhost:8000/ws/live-terminal');
-
-    ws.onmessage = (event) => {
-      try {
-        const parsed = JSON.parse(event.data);
-        if (parsed.channel === 'market:signals') {
-          setSignals((prev) => [parsed.data, ...prev.slice(0, 9)]); // نگهداری ۱۰ سیگنال آخر
-        }
-      } catch (e) {
-        console.error('WS Parse error', e);
-      }
-    };
-
-    return () => ws.close();
-  }, []);
-
+export default function SignalsView({ signals, cashBalance, totalPnL }: Props) {
   return (
-    <div className="bg-slate-900/40 border border-slate-800 rounded-xl p-5 col-span-full shadow-xl">
+    <div className="bg-slate-900/40 border border-slate-800 rounded-xl p-5 col-span-full shadow-2xl">
       <div className="flex items-center justify-between mb-4">
-        <h2 className="text-sm font-semibold text-slate-400 uppercase tracking-wider flex items-center gap-2">
-          <ShieldCheck className="w-4 h-4 text-emerald-400" />
-          Live Paper Trading & Signal Terminal
+        <h2 className="text-sm font-semibold text-slate-300 uppercase tracking-wider flex items-center gap-2">
+          <Zap className="w-4 h-4 text-cyan-400 fill-cyan-400/20" />
+          Live High-Frequency Scalp Signals (LightGBM + Microstructure)
         </h2>
         <div className="flex items-center space-x-6 text-xs font-mono">
           <div>
-            <span className="text-slate-500 mr-2">Paper Cash:</span>
-            <span className="text-slate-200 font-bold">${paperStats.cash.toLocaleString()}</span>
+            <span className="text-slate-500 mr-2">Paper Balance:</span>
+            <span className="text-slate-200 font-bold">${cashBalance.toLocaleString('en-US', { minimumFractionDigits: 2 })}</span>
           </div>
           <div>
-            <span className="text-slate-500 mr-2">Live PnL:</span>
-            <span className={paperStats.pnl >= 0 ? 'text-emerald-400 font-bold' : 'text-rose-400 font-bold'}>
-              ${paperStats.pnl.toFixed(2)}
+            <span className="text-slate-500 mr-2">Realized PnL:</span>
+            <span className={totalPnL >= 0 ? 'text-emerald-400 font-bold' : 'text-rose-400 font-bold'}>
+              {totalPnL >= 0 ? `+$${totalPnL.toFixed(2)}` : `-$${Math.abs(totalPnL).toFixed(2)}`}
             </span>
           </div>
         </div>
       </div>
 
       <div className="overflow-x-auto">
-        <table className="w-full text-left text-xs">
+        <table className="w-full text-left text-xs font-mono">
           <thead>
-            <tr className="border-b border-slate-800 text-slate-500 font-mono">
+            <tr className="border-b border-slate-800 text-slate-500">
               <th className="pb-3">SYMBOL</th>
               <th className="pb-3">ACTION</th>
-              <th className="pb-3">CONFIDENCE</th>
-              <th className="pb-3">REASON CODES</th>
+              <th className="pb-3">ML PROBABILITY</th>
+              <th className="pb-3">TREND BIAS</th>
+              <th className="pb-3">DECAYED SENTIMENT</th>
               <th className="pb-3 text-right">TIMESTAMP</th>
             </tr>
           </thead>
-          <tbody className="divide-y divide-slate-800/60 font-mono">
+          <tbody className="divide-y divide-slate-800/60">
             {signals.length === 0 ? (
               <tr>
-                <td colSpan={5} className="py-6 text-center text-slate-500 italic">
-                  Awaiting live market events & intelligence triggers... (System evaluating NO_TRADE / HOLD)
+                <td colSpan={6} className="py-8 text-center text-slate-500 italic">
+                  Awaiting ML scalp signals (Model scanning 1s/15s microstructure + trend bias)...
                 </td>
               </tr>
             ) : (
               signals.map((s, idx) => (
-                <tr key={idx} className="hover:bg-slate-900/50 transition">
+                <tr key={idx} className="hover:bg-slate-900/60 transition">
                   <td className="py-3 font-bold text-slate-200">{s.symbol}</td>
                   <td className="py-3">
-                    <span className={`px-2.5 py-1 rounded text-[10px] font-bold ${
-                      s.action === 'BUY' ? 'bg-emerald-950 text-emerald-400 border border-emerald-800' :
-                      s.action === 'SELL' ? 'bg-rose-950 text-rose-400 border border-rose-800' :
-                      'bg-slate-800 text-slate-400 border border-slate-700'
-                    }`}>
+                    <span className="px-2.5 py-1 rounded text-[10px] font-bold bg-emerald-950 text-emerald-400 border border-emerald-800">
                       {s.action}
                     </span>
                   </td>
-                  <td className="py-3 text-cyan-400">{(s.confidence * 100).toFixed(1)}%</td>
-                  <td className="py-3 text-slate-400">{s.reason_codes?.join(', ') || 'N/A'}</td>
-                  <td className="py-3 text-right text-slate-500">{new Date(s.decision_ts).toLocaleTimeString()}</td>
+                  <td className="py-3 text-cyan-400 font-bold">{(s.probability * 100).toFixed(1)}%</td>
+                  <td className="py-3">
+                    <span className={s.trend_bias > 0 ? 'text-emerald-400' : 'text-rose-400'}>
+                      {s.trend_bias > 0 ? '15m Bullish' : '15m Bearish'}
+                    </span>
+                  </td>
+                  <td className="py-3 text-slate-300">{s.decayed_sentiment > 0 ? `+${s.decayed_sentiment.toFixed(2)}` : s.decayed_sentiment.toFixed(2)}</td>
+                  <td className="py-3 text-right text-slate-500">{new Date(s.timestamp).toLocaleTimeString()}</td>
                 </tr>
               ))
             )}
