@@ -34,6 +34,34 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let scalp_executor = Arc::new(Mutex::new(HighFrequencyScalpExecutor::new(&settings.trading)));
 
+    // ⚡ ۱. استعلام و همگام‌سازی خودکار تنظیمات سرمایه از گیت‌وی در لحظه روشن شدن (Boot Sync)
+    let executor_bootstrap = scalp_executor.clone();
+    tokio::spawn(async move {
+        let client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(3))
+            .build()
+            .unwrap_or_default();
+        
+        // چند تلاش تکرار در صورت روشن شدن همزمان سرویس‌ها
+        for _ in 0..6 {
+            if let Ok(res) = client.get("http://127.0.0.1:8000/api/config/capital").send().await {
+                if let Ok(val) = res.json::<serde_json::Value>().await {
+                    let cap = val["total_capital"].as_str().and_then(|s| s.parse::<Decimal>().ok())
+                        .or_else(|| val["total_capital"].as_f64().and_then(|f| Decimal::from_f64_retain(f)));
+                    let alloc = val["allocation_pct"].as_f64().and_then(|f| Decimal::from_f64_retain(f));
+                    let lev = val["leverage"].as_f64().and_then(|f| Decimal::from_f64_retain(f));
+                    let kill = val["kill_switch"].as_bool();
+
+                    let mut executor = executor_bootstrap.lock().await;
+                    executor.update_risk_config(cap, alloc, lev, kill);
+                    info!("✅ Bootstrapped dynamic risk parameters directly from Gateway API!");
+                    break;
+                }
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        }
+    });
+
     let (event_tx, mut event_rx) = mpsc::channel::<MarketEvent>(settings.market_data.channel_buffer_size);
     let binance_client = BinanceClient::new(settings.market_data.clone(), event_tx);
 
@@ -46,7 +74,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let books_clone_signal = order_books.clone();
     let prices_clone_signal = last_known_prices.clone();
 
-    // ۱. لیسنر دریافت سیگنال با ردیابی شناسه سیگنال
+    // ۲. لیسنر دریافت سیگنال با ردیابی شناسه سیگنال
     tokio::spawn(async move {
         if let Ok(client) = redis::Client::open(redis_url_sub.as_str()) {
             if let Ok(mut pubsub) = client.get_async_pubsub().await {
@@ -95,7 +123,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     });
 
-    // ۲. لیسنر تنظیمات لحظه‌ای ریسک و سرمایه
+    // ۳. لیسنر تغییرات لحظه‌ای ریسک و سرمایه از فرانت‌اند
     let redis_url_cfg = settings.storage.redis_url.clone();
     let executor_clone_cfg = scalp_executor.clone();
     tokio::spawn(async move {
@@ -110,7 +138,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 while let Some(msg) = stream.next().await {
                     let payload: String = msg.get_payload().unwrap_or_default();
                     if let Ok(val) = serde_json::from_str::<serde_json::Value>(&payload) {
-                        let cap = val["total_capital"].as_str().and_then(|s| s.parse::<Decimal>().ok());
+                        let cap = val["total_capital"].as_str().and_then(|s| s.parse::<Decimal>().ok())
+                            .or_else(|| val["total_capital"].as_f64().and_then(|f| Decimal::from_f64_retain(f)));
                         let alloc = val["allocation_pct"].as_f64().and_then(|f| Decimal::from_f64_retain(f));
                         let lev = val["leverage"].as_f64().and_then(|f| Decimal::from_f64_retain(f));
                         let kill = val["kill_switch"].as_bool();
@@ -123,7 +152,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     });
 
-    // ۳. پردازش تیک‌ها، به‌روزرسانی MFE / MAE و ثبت خروجی‌ها
+    // ۴. پردازش تیک‌ها، به‌روزرسانی MFE / MAE و ثبت خروجی‌ها
     while let Some(event) = event_rx.recv().await {
         match event {
             MarketEvent::Trade(trade) => {
