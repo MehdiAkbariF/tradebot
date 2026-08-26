@@ -11,82 +11,28 @@ from loguru import logger
 
 REDIS_URL = "redis://127.0.0.1:6379"
 
-class LocalCandleBuilder:
-    def __init__(self, max_candles=60):
-        self.candles = deque(maxlen=max_candles)
-        self.current_candle = None
-        self.current_minute = None
-
-    def add_tick(self, price: float, vol: float, ts: datetime):
-        minute = ts.strftime("%Y-%m-%d %H:%M")
-        if self.current_minute != minute:
-            if self.current_candle:
-                self.candles.append(self.current_candle)
-            self.current_minute = minute
-            self.current_candle = {
-                "open": price, "high": price, "low": price, "close": price, "vol": vol
-            }
-        else:
-            self.current_candle["high"] = max(self.current_candle["high"], price)
-            self.current_candle["low"] = min(self.current_candle["low"], price)
-            self.current_candle["close"] = price
-            self.current_candle["vol"] += vol
-
-    def get_df(self) -> pd.DataFrame:
-        data = list(self.candles)
-        if self.current_candle:
-            data.append(self.current_candle)
-        if not data:
-            return pd.DataFrame()
-        return pd.DataFrame(data)
-
 class RealtimeScalpBridge:
     def __init__(self):
         self.price_history = {}
-        self.volume_history = {}
         self.buy_vol_history = {}
         self.sell_vol_history = {}
-        self.candle_builders = {
-            "BTCUSDT": LocalCandleBuilder(max_candles=60),
-            "ETHUSDT": LocalCandleBuilder(max_candles=60)
-        }
-        self.active_news = deque(maxlen=50)
-        self.decay_lambda = 0.0069
         self.last_signal_time = {}
         self.last_heartbeat_time = 0.0
-
-    def get_decayed_sentiment(self) -> float:
-        now = datetime.now(timezone.utc)
-        total = 0.0
-        for n in self.active_news:
-            delta = (now - n["ts"]).total_seconds()
-            if delta <= 600:
-                decay = np.exp(-self.decay_lambda * delta)
-                total += n["score"] * decay
-        return float(np.clip(total, -1.0, 1.0))
 
     def evaluate_live_market(self, symbol: str, price: float, vol: float, is_buyer_maker: bool) -> dict | None:
         now = datetime.now(timezone.utc)
         
-        builder = self.candle_builders.get(symbol)
-        if builder:
-            builder.add_tick(price, vol, now)
-
         if symbol not in self.price_history:
-            self.price_history[symbol] = deque(maxlen=1000)
-            self.volume_history[symbol] = deque(maxlen=1000)
-            self.buy_vol_history[symbol] = deque(maxlen=1000)
-            self.sell_vol_history[symbol] = deque(maxlen=1000)
+            self.price_history[symbol] = deque(maxlen=200)
+            self.buy_vol_history[symbol] = deque(maxlen=200)
+            self.sell_vol_history[symbol] = deque(maxlen=200)
             self.last_signal_time[symbol] = 0.0
 
         hist_p = self.price_history[symbol]
-        hist_v = self.volume_history[symbol]
         hist_bv = self.buy_vol_history[symbol]
         hist_sv = self.sell_vol_history[symbol]
         
         hist_p.append(price)
-        hist_v.append(vol)
-
         if not is_buyer_maker:
             hist_bv.append(vol)
             hist_sv.append(0.0)
@@ -94,82 +40,57 @@ class RealtimeScalpBridge:
             hist_bv.append(0.0)
             hist_sv.append(vol)
 
-        if len(hist_p) < 30:
+        if len(hist_p) < 40:
             return None
 
         prices = list(hist_p)
-        p_now = prices[-1]
-        p_5s = prices[-6] if len(prices) >= 6 else prices[0]
-        ret_5s = (p_now - p_5s) / p_5s if p_5s > 0 else 0.0
-
-        # ۱. محاسبه دامنه نوسان واقعی ۳۰ تیک اخیر
-        sub_30 = prices[-30:]
-        volatility_bps = float(((max(sub_30) - min(sub_30)) / sub_30[0]) * 10000.0) if len(sub_30) > 1 else 0.0
-
-        # افزایش فیلتر به 0.70 پیپ برای جلوگیری از ورود در رِنج‌های مرده
-        if volatility_bps < 0.70:
-            now_sec = now.timestamp()
-            if (now_sec - self.last_heartbeat_time) > 8.0:
-                self.last_heartbeat_time = now_sec
-                logger.info(f"💤 STANDBY (Low Volatility): {symbol} Vol={volatility_bps:.2f} bps | Waiting for range expansion...")
-            return None
-
-        # ۲. فیلتر ترند کلان ۳۰۰ تیک
-        long_window = min(len(prices), 300)
-        ma_long = float(np.mean(prices[-long_window:]))
         
-        if p_now > ma_long:
-            trend_bias = 1.0
-            trend_str = "BULLISH 🟢"
-        else:
-            trend_bias = -1.0
-            trend_str = "BEARISH 🔴"
-
-        # ۳. عدم تعادل جریان سفارشات (OFI)
-        ofi_window = min(len(hist_bv), 60)
-        b_vol = sum(list(hist_bv)[-ofi_window:])
-        s_vol = sum(list(hist_sv)[-ofi_window:])
+        # 🧠 مدل Market Making: بررسی خستگی در 40 تیک اخیر
+        p_now = prices[-1]
+        
+        # OFI فوق‌سریع (20 تیک)
+        b_vol = sum(list(hist_bv)[-20:])
+        s_vol = sum(list(hist_sv)[-20:])
         tot_vol = b_vol + s_vol
         live_ofi = float((b_vol - s_vol) / tot_vol) if tot_vol > 0 else 0.0
 
-        decayed_sentiment = self.get_decayed_sentiment()
+        # محاسبه Micro-Price Drift (انحراف قیمت نسبت به میانگین خرد)
+        micro_mean = np.mean(prices[-20:])
+        price_drift = (p_now - micro_mean) / micro_mean * 10000.0 # به BPS
+
         now_sec = now.timestamp()
+        
+        # فرمول آربیتراژ آماری:
+        # اگر خریداران در اوردربوک زیادند (OFI مثبت) اما قیمت نتوانسته رشد کند (Drift منفی)، یعنی دیوار فروش وجود دارد -> SELL!
+        # اگر فروشندگان حمله‌ور شده‌اند (OFI منفی) اما قیمت نمی‌ریزد -> BUY!
+        
+        alpha_score = (live_ofi * 0.60) - (price_drift * 0.40)
 
-        # محاسبه نمره آلفا با وزن‌دهی به ترند و اوردربوک
-        alpha_score = (trend_bias * 0.45) + (live_ofi * 0.40) + (np.clip(ret_5s * 2500.0, -0.20, 0.20)) + (decayed_sentiment * 0.05)
-
-        if (now_sec - self.last_heartbeat_time) > 5.0:
+        if (now_sec - self.last_heartbeat_time) > 2.0:
             self.last_heartbeat_time = now_sec
-            logger.info(
-                f"📊 LIVE SCAN: {symbol} = ${p_now:,.2f} | "
-                f"Trend: {trend_str} | "
-                f"Range: {volatility_bps:.2f} bps | "
-                f"OFI: {live_ofi:+.2f} | "
-                f"Alpha: {alpha_score:+.2f}"
-            )
+            logger.info(f"🔬 MICRO-SCAN: {symbol} | OFI: {live_ofi:+.2f} | Drift: {price_drift:+.2f} bps | Alpha: {alpha_score:+.2f}")
 
-        # ۴. شلیک سیگنال فقط در صورت وجود مومنتوم پرقدرت (آلفای 0.50 و OFI بالای 0.40)
-        if (now_sec - self.last_signal_time[symbol]) > 30.0:
-            if trend_bias > 0 and p_now >= ma_long and alpha_score >= 0.50 and live_ofi > 0.40:
+        # 🚀 شلیک سیگنال رگباری هر 3 ثانیه!
+        if (now_sec - self.last_signal_time[symbol]) > 3.0:
+            # 💡 سیگنال معکوس مارکت‌میکینگ (Mean Reversion)
+            if live_ofi < -0.40 and price_drift > -0.10 and alpha_score <= -0.50:
                 self.last_signal_time[symbol] = now_sec
-                prob = round(0.80 + (alpha_score * 0.15), 4)
                 return {
                     "symbol": symbol,
                     "action": "BUY",
-                    "probability": prob,
+                    "probability": 0.95,
                     "trend_bias": 1.0,
-                    "decayed_sentiment": round(decayed_sentiment, 2),
+                    "decayed_sentiment": 0.0,
                     "timestamp": now.isoformat()
                 }
-            elif trend_bias < 0 and p_now <= ma_long and alpha_score <= -0.50 and live_ofi < -0.40:
+            elif live_ofi > 0.40 and price_drift < 0.10 and alpha_score >= 0.50:
                 self.last_signal_time[symbol] = now_sec
-                prob = round(0.80 + (abs(alpha_score) * 0.15), 4)
                 return {
                     "symbol": symbol,
                     "action": "SELL",
-                    "probability": prob,
+                    "probability": 0.95,
                     "trend_bias": -1.0,
-                    "decayed_sentiment": round(decayed_sentiment, 2),
+                    "decayed_sentiment": 0.0,
                     "timestamp": now.isoformat()
                 }
 
@@ -180,7 +101,7 @@ class RealtimeScalpBridge:
         pubsub = client.pubsub()
         await pubsub.subscribe("market:trades:btcusdt", "market:trades:ethusdt")
 
-        logger.info("Realtime Scalp Alpha Engine ACTIVE (Strict High-Alpha Mode)...")
+        logger.info("🔥 STATISTICAL ARBITRAGE (MARKET MAKER) ENGINE ACTIVE...")
 
         while True:
             msg = await pubsub.get_message(ignore_subscribe_messages=True, timeout=0.01)
@@ -195,33 +116,9 @@ class RealtimeScalpBridge:
                     signal = self.evaluate_live_market(symbol, price, vol, is_buyer_maker)
                     if signal:
                         await client.publish("market:scalp_signals", json.dumps(signal))
-                        logger.info(f"🎯 MAKER SCALP SIGNAL: {signal['symbol']} -> {signal['action']} ({signal['probability']*100:.1f}%)")
+                        logger.success(f"⚡ MM LIQUIDITY SIGNAL: Provide {signal['action']} on {signal['symbol']}")
                 except Exception as e:
                     logger.error(f"Error processing market message: {e}")
-
-            # استریم اخبار
-            news_streams = await client.xread({"events:news_raw": "$"}, count=2, block=10)
-            if news_streams:
-                for _, messages in news_streams:
-                    for _, fields in messages:
-                        payload = json.loads(fields.get("payload", "{}"))
-                        title = payload.get("title", "").lower()
-                        
-                        bullish_words = ["surge", "jump", "record", "etf", "approval", "rally", "gain", "inflow", "sec approves"]
-                        bearish_words = ["crash", "drop", "hack", "lawsuit", "ban", "sec sues", "outflow", "plunge"]
-                        
-                        pos_count = sum(1 for w in bullish_words if w in title)
-                        neg_count = sum(1 for w in bearish_words if w in title)
-                        
-                        score = 0.0
-                        if pos_count > neg_count: score = min(0.3 * pos_count, 0.9)
-                        elif neg_count > pos_count: score = max(-0.3 * neg_count, -0.9)
-                        
-                        self.active_news.append({
-                            "ts": datetime.now(timezone.utc),
-                            "score": score,
-                            "title": payload.get("title", "")
-                        })
 
             await asyncio.sleep(0.001)
 

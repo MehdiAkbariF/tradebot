@@ -57,9 +57,9 @@ pub struct ClosedTradeRecord {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DynamicRiskConfig {
     pub total_capital: Decimal,
-    pub allocation_pct: Decimal, // تخصیص سرمایه در هر معامله
-    pub leverage: Decimal,       // ضریب لوریج
-    pub min_notional_guard: Decimal, // حداقل اردر مجاز صرافی (5 دلار)
+    pub allocation_pct: Decimal, 
+    pub leverage: Decimal,       
+    pub min_notional_guard: Decimal, 
     pub kill_switch: bool,
 }
 
@@ -87,25 +87,27 @@ impl HighFrequencyScalpExecutor {
             pending_orders: HashMap::new(),
             risk_config: DynamicRiskConfig {
                 total_capital: initial_cap,
-                allocation_pct: dec!(0.30),
-                leverage: dec!(1.0),
-                min_notional_guard: dec!(5.0),
+                allocation_pct: dec!(0.50), // 50% از سرمایه آزاد
+                leverage: dec!(5.0),        // لوریج 5x برای افزایش مبلغ سود 2 پیپی
+                min_notional_guard: dec!(5.0), 
                 kill_switch: false,
             },
             cash_balance: initial_cap,
             total_margin_in_use: dec!(0.0),
             maker_fee_ratio: Decimal::from_f64_retain(config.maker_fee_bps / 10000.0).unwrap_or(dec!(0.0001)),
-            tp_ratio: dec!(0.0018),            // 18 bps حد سود کامل
-            sl_ratio: dec!(0.0014),            // 14 bps حد ضرر ایمن
-            breakeven_ratio: dec!(0.0008),     // 8 bps فعال‌سازی ریسک‌فری
-            early_harvest_ratio: dec!(0.0010), // افزایش به 10 bps (0.10%) برای ۲ برابر شدن سود معاملات برنده
-            max_holding_sec: 300,
+            
+            // 🧠 تنظیمات خشن مارکت‌میکینگ (Spread Capture با وین‌ریت بالا)
+            tp_ratio: dec!(0.0002),            // تارگت 2 پیپ (لمس فوق سریع با یک تیک بازار)
+            sl_ratio: dec!(0.0012),            // استاپ 12 پیپ (کاملا خارج از محدوده نویز)
+            breakeven_ratio: dec!(0.0001),     // بعد از 1 پیپ سود، استاپ به نقطه ورود می‌رود
+            early_harvest_ratio: dec!(0.0001), // فرار سریع با سود در صورت توقف مومنتوم
+            max_holding_sec: 60,               // ⚠️ افزایش فرصت تنفس به 60 ثانیه
+            
             max_spread_bps: config.max_spread_bps,
-            maker_timeout_sec: config.maker_timeout_seconds,
+            maker_timeout_sec: 3,              // لغو اردرهای کاشته‌شده در صورت عدم پر شدن در 3 ثانیه
         }
     }
 
-    /// به‌روزرسانی داینامیک تنظیمات سرمایه و ریسک
     pub fn update_risk_config(&mut self, new_cap: Option<Decimal>, alloc_pct: Option<Decimal>, lev: Option<Decimal>, kill: Option<bool>) {
         if let Some(c) = new_cap {
             self.risk_config.total_capital = c;
@@ -128,7 +130,6 @@ impl HighFrequencyScalpExecutor {
         }
     }
 
-    /// محاسبه داینامیک حجم بر اساس موجودی نقد آزاد (رفع قطعی باگ اردرهای منفی)
     pub fn calculate_dynamic_notional(&self) -> Option<Decimal> {
         if self.risk_config.kill_switch {
             return None;
@@ -144,7 +145,6 @@ impl HighFrequencyScalpExecutor {
         Some(notional)
     }
 
-    /// کاشت سفارش لیمیت میکر
     pub fn place_maker_order(
         &mut self,
         symbol: &str,
@@ -165,7 +165,10 @@ impl HighFrequencyScalpExecutor {
         }
 
         let notional = self.calculate_dynamic_notional()?;
+        
+        // کاشت اردر دقیقاً در لبه اوردربوک برای بهره‌مندی کامل از Maker Rebate
         let limit_price = (if is_buy { metrics.best_bid } else { metrics.best_ask }).round_dp(2);
+        
         if limit_price <= dec!(0.0) {
             return None;
         }
@@ -186,15 +189,13 @@ impl HighFrequencyScalpExecutor {
         self.pending_orders.insert(symbol.to_string(), order.clone());
         info!(
             symbol = %symbol,
-            side = if is_buy { "BUY" } else { "SELL" },
+            side = if is_buy { "BID" } else { "ASK" },
             price = %limit_price,
-            notional = %notional,
-            "📥 Dynamic Maker Order PLACED"
+            "💎 Liquidity Provided (Market Making)"
         );
         Some(order)
     }
 
-    /// بررسی پر شدن سفارش و محاسبه تارگت‌ها
     pub fn process_pending_orders_and_fills(&mut self, symbol: &str, trade_price: Decimal) -> Option<ScalpPosition> {
         let order = self.pending_orders.get(symbol)?.clone();
         let now = Utc::now();
@@ -243,25 +244,20 @@ impl HighFrequencyScalpExecutor {
 
             info!(
                 symbol = %symbol,
-                side = if order.is_buy { "BUY" } else { "SELL" },
                 entry = %order.limit_price,
-                tp = %tp_price,
-                sl = %sl_price,
-                notional = %order.notional,
-                "⚡ Scalp Position FILLED"
+                "⚡ Order Swept! Capturing Spread..."
             );
             return Some(position);
         }
 
         if age >= order.timeout_seconds {
             self.pending_orders.remove(symbol);
-            info!(symbol = %symbol, "⌛ Stale Maker Order CANCELLED");
+            info!(symbol = %symbol, "⌛ Quote Stale (Timeout) -> CANCELLED");
         }
 
         None
     }
 
-    /// ارزیابی خروج با سود و مدیریت بریک‌ایون
     pub fn evaluate_open_positions(
         &mut self,
         symbol: &str,
@@ -281,43 +277,48 @@ impl HighFrequencyScalpExecutor {
             return None;
         }
 
-        // ۱. انتقال حد ضرر به نقطه سر‌به‌سر پس از ۸ پیپ سود
+        // قفل ریسک برق‌آسا: پس از لمس 1 پیپ سود، نقطه استاپ به نقطه ورود منتقل می‌شود
         if position.is_buy && mark_price >= position.entry_price * (dec!(1.0) + self.breakeven_ratio) && !position.is_breakeven_active {
             position.stop_loss_price = (position.entry_price + (position.entry_price * self.maker_fee_ratio * dec!(2))).round_dp(2);
             position.is_breakeven_active = true;
-            info!(symbol = %symbol, "🛡️ Breakeven Triggered: Zero-Risk Active");
         } else if !position.is_buy && mark_price <= position.entry_price * (dec!(1.0) - self.breakeven_ratio) && !position.is_breakeven_active {
             position.stop_loss_price = (position.entry_price - (position.entry_price * self.maker_fee_ratio * dec!(2))).round_dp(2);
             position.is_breakeven_active = true;
-            info!(symbol = %symbol, "🛡️ Breakeven Triggered: Zero-Risk Active");
         }
 
         let hit_tp = if position.is_buy { mark_price >= position.take_profit_price } else { mark_price <= position.take_profit_price };
         let hit_sl = if position.is_buy { mark_price <= position.stop_loss_price } else { mark_price >= position.stop_loss_price };
-        
-        let notional_current = mark_price * position.quantity.abs();
-        let notional_entry = position.entry_price * position.quantity.abs();
-        let exit_fee = notional_current * self.maker_fee_ratio;
-        
-        let current_raw_pnl = if position.is_buy {
-            (mark_price - position.entry_price) * position.quantity.abs()
-        } else {
-            (position.entry_price - mark_price) * position.quantity.abs()
-        };
-        let current_net_pnl = current_raw_pnl - exit_fee;
-
-        // سیو سود در ۱۰ پیپ سود خالص (افزایش سود هر ترید برنده)
-        let dynamic_profit_harvest_target = notional_entry * self.early_harvest_ratio;
-        let early_profit_take = hold_duration >= 15 && current_net_pnl >= dynamic_profit_harvest_target;
         let hit_time = hold_duration >= position.max_holding_sec;
 
-        if hit_tp || hit_sl || early_profit_take || hit_time {
-            let net_pnl = current_net_pnl.round_dp(2);
-            let pnl_pct = if notional_entry > dec!(0.0) {
-                let ratio = net_pnl / notional_entry;
-                ratio.to_string().parse::<f64>().unwrap_or(0.0) * 100.0
+        // 🛡️ منطق Scratch Exit تأخیردار: اگر 45 ثانیه گذشت و تارگت 2 پیپی لمس نشد، فرار روی نقطه ورود فعال می‌شود
+        let mut forced_scratch = false;
+        let hit_scratch_time = hold_duration >= 45; 
+
+        let final_mark_price = if hit_scratch_time && !hit_tp {
+            forced_scratch = true;
+            position.entry_price // شبیه‌سازی لیمیت خروج در نقطه سر‌به‌سر
+        } else {
+            mark_price
+        };
+
+        if hit_tp || hit_sl || hit_time || forced_scratch {
+            let notional_current = final_mark_price * position.quantity.abs();
+            let notional_entry = position.entry_price * position.quantity.abs();
+            
+            // در خروج Scratch فرض می‌شود اردر Maker پر شده، پس کارمزد خروج صفر است
+            let exit_fee = if forced_scratch { dec!(0.0) } else { notional_current * self.maker_fee_ratio };
+            
+            let current_raw_pnl = if position.is_buy {
+                (final_mark_price - position.entry_price) * position.quantity.abs()
             } else {
-                0.0
+                (position.entry_price - final_mark_price) * position.quantity.abs()
+            };
+            
+            let net_pnl = (current_raw_pnl - exit_fee).round_dp(2);
+            let pnl_pct = if notional_entry > dec!(0.0) {
+                (net_pnl / notional_entry).to_string().parse::<f64>().unwrap_or(0.0) * 100.0
+            } else { 
+                0.0 
             };
 
             position.is_open = false;
@@ -327,11 +328,11 @@ impl HighFrequencyScalpExecutor {
             let total_round_trip_fee = (exit_fee + (notional_entry * self.maker_fee_ratio)).round_dp(2);
 
             let reason = if hit_tp { 
-                "MAKER_TAKE_PROFIT 🎯" 
-            } else if early_profit_take { 
-                "EARLY_PROFIT_HARVEST 💰" 
+                "SPREAD_CAPTURED 🎯" 
             } else if hit_sl { 
-                "STOP_LOSS 🛑" 
+                "TOXIC_FLOW_STOP 🛑" 
+            } else if forced_scratch {
+                "SCRATCH_EXIT (NO LOSS) 🛡️"
             } else { 
                 "TIME_EXPIRATION ⏱️" 
             };
@@ -341,7 +342,7 @@ impl HighFrequencyScalpExecutor {
                 symbol: symbol.to_string(),
                 action: if position.is_buy { "BUY".into() } else { "SELL".into() },
                 entry_price: position.entry_price,
-                exit_price: mark_price,
+                exit_price: final_mark_price,
                 quantity: position.quantity.abs(),
                 notional_usd: notional_entry,
                 fee_paid: total_round_trip_fee,
@@ -358,7 +359,7 @@ impl HighFrequencyScalpExecutor {
                 reason = %reason,
                 pnl = %net_pnl,
                 held_sec = %hold_duration,
-                "💰 Scalp CLOSED (PnL: ${})", net_pnl
+                "💨 HFT Cycle Complete"
             );
 
             return Some(record);
