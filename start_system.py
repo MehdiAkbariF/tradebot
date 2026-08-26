@@ -51,21 +51,20 @@ def is_port_in_use(port: int) -> bool:
         return s.connect_ex(("127.0.0.1", port)) == 0
 
 def wipe_ledgers():
-    """پاک‌سازی تمام استیتمنت‌ها و حافظه هوش مصنوعی برای تست جدید"""
-    print(f"\n{RED}{BOLD}[!] Wiping All Previous Trade Ledgers and AI Memory...{RESET}")
+    """پاک‌سازی تمام استیتمنت‌ها برای تست جدید و کانونیکال"""
+    print(f"\n{RED}{BOLD}[!] Wiping All Previous Trade Ledgers for Clean Audit...{RESET}")
     files_to_delete = [
         "python_engine/trade_ledger.json",
         "trade_ledger.json",
-        "python_engine/scalp_lightgbm_model.txt"
     ]
     for file in files_to_delete:
         if os.path.exists(file):
             try:
                 os.remove(file)
-                print(f"{YELLOW}[*] Deleted: {file}{RESET}")
+                print(f"{YELLOW}[*] Reset: {file}{RESET}")
             except Exception as e:
                 print(f"{RED}Error deleting {file}: {e}{RESET}")
-    print(f"{GREEN}[✓] Clean Slate Ready! Statement has been reset to Zero.{RESET}\n")
+    print(f"{GREEN}[✓] Clean Slate Ready! Ledger reset to Zero.{RESET}\n")
 
 def check_preflight():
     print(f"\n{CYAN}{BOLD}======================================================{RESET}")
@@ -94,12 +93,15 @@ def check_preflight():
     else:
         print(f"{GREEN}[✓] Redis Server is active on port 6379.{RESET}")
 
-    # ۴. بررسی وجود مدل اولیه (در صورت اجرای Clean از نو آموزش داده می‌شود)
+    # ۴. بررسی وجود مدل اولیه
     model_path = os.path.join("python_engine", "scalp_lightgbm_model.txt")
     if not os.path.exists(model_path):
         print(f"{YELLOW}[*] Training fresh baseline LightGBM model...{RESET}")
-        subprocess.run([sys.executable, "app/research/feature_pipeline.py"], cwd="python_engine", shell=IS_WIN, check=True)
-        print(f"{GREEN}[✓] Model trained and ready.{RESET}")
+        try:
+            subprocess.run([sys.executable, "app/research/feature_pipeline.py"], cwd="python_engine", shell=IS_WIN, check=True)
+            print(f"{GREEN}[✓] Model trained and ready.{RESET}")
+        except Exception as e:
+            print(f"{RED}Model init warning: {e}{RESET}")
 
 def start_services():
     services = [
@@ -107,7 +109,8 @@ def start_services():
         ("AI-SCALP-BRIDGE",      [sys.executable, "app/intelligence/realtime_bridge.py"], "python_engine", MAGENTA),
         ("AI-SELF-LEARNING",     [sys.executable, "app/research/continual_learning.py"], "python_engine", PURPLE),
         ("RSS-COLLECTOR",        [sys.executable, "app/collectors/rss_collector.py"], "python_engine", YELLOW),
-        ("RUST-CORE",            ["cargo", "run"], "rust_core", CYAN),
+        # ⚡ اجرای راست در حالت بهینه شده پرسرعت Release
+        ("RUST-CORE",            ["cargo", "run", "--release"], "rust_core", CYAN),
         ("NEXTJS-DASHBOARD",     ["npm", "run", "dev"], "dashboard", BLUE),
     ]
 
@@ -129,8 +132,10 @@ def start_services():
         t.start()
         time.sleep(1.2)
 
-    print(f"\n{GREEN}{BOLD}✨ All 6 Engine Components are ACTIVE for 48H Test!{RESET}")
-    print(f"{GREEN}{BOLD}👉 Open Statement Audit: http://localhost:3000/statement{RESET}")
+    print(f"\n{GREEN}{BOLD}✨ All 6 Engine Components are ACTIVE & Synchronized!{RESET}")
+    print(f"{GREEN}{BOLD}👉 Live Dashboard:     http://localhost:3000{RESET}")
+    print(f"{GREEN}{BOLD}👉 Statement Audit:    http://localhost:3000/statement{RESET}")
+    print(f"{CYAN}{BOLD}📊 Quant Diagnostics:  http://localhost:8000/api/diagnostics/report{RESET}")
     print(f"{YELLOW}Press CTRL+C at any time to cleanly stop all services.\n{RESET}")
 
 def shutdown(signum=None, frame=None):

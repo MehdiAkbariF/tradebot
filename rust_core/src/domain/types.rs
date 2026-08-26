@@ -1,3 +1,4 @@
+// مسیر: rust_core/src/domain/types.rs
 use chrono::{DateTime, Utc};
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
@@ -24,7 +25,7 @@ pub struct DepthDelta {
     pub symbol: String,
     pub first_update_id: u64,
     pub final_update_id: u64,
-    pub bids: Vec<(Decimal, Decimal)>, // (Price, Size)
+    pub bids: Vec<(Decimal, Decimal)>,
     pub asks: Vec<(Decimal, Decimal)>,
     pub exchange_ts: DateTime<Utc>,
     pub received_ts: DateTime<Utc>,
@@ -39,5 +40,24 @@ pub struct OrderBookMetrics {
     pub mid_price: Decimal,
     pub micro_price: Decimal,
     pub imbalance_top10: f64,
+    pub timestamp: DateTime<Utc>,
+}
+
+/// بردار استاندارد ویژگی‌های سیگنال جهت ردیابی کامل
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CanonicalSignalPayload {
+    pub signal_id: String,
+    pub strategy_version: String,
+    pub model_version: String,
+    pub feature_schema_version: String,
+    pub symbol: String,
+    pub action: String, // BUY / SELL
+    pub probability: f64,
+    pub alpha_score: f64,
+    pub ofi: f64,
+    pub range_bps: f64,
+    pub price_drift_bps: f64,
+    pub is_volume_expanding: bool,
+    pub signal_price: Decimal,
     pub timestamp: DateTime<Utc>,
 }
