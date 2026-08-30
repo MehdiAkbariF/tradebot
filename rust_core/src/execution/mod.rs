@@ -120,7 +120,7 @@ impl ExecutionEngine {
             sl_bps,
             state: ExecutionState::Submitted,
             created_at: Utc::now(),
-            timeout_seconds: 4,
+            timeout_seconds:10 ,
         };
 
         self.pending_orders.insert(sig.symbol.clone(), order.clone());

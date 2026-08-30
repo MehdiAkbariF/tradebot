@@ -1,0 +1,23 @@
+[
+  {
+    "closed_at": "2026-08-30T10:17:17.362768200+00:00",
+    "entry_price": "2453.84",
+    "exit_price": "2453.84",
+    "exit_reason": "TIME_EXPIRATION \u23f1\ufe0f",
+    "gross_pnl": "0",
+    "latency_rtt_ms": 26284,
+    "mae_bps": 0.0,
+    "margin_allocated": "10.060744",
+    "mfe_bps": 0.0,
+    "net_pnl": "-0.0070425208",
+    "notional_usd": "10.060744",
+    "opened_at": "2026-08-30T10:16:51.078342500+00:00",
+    "pnl_bps": -7.0,
+    "quantity": "0.0041",
+    "side": "Buy",
+    "signal_id": "5eca5549-a459-4887-95e1-1be2ddb1f315",
+    "symbol": "ETHUSDT",
+    "total_fee": "0.0070425208",
+    "trade_id": "b38c0e8a-d0db-4fd3-a9e6-836115d52682"
+  }
+]

@@ -11,7 +11,7 @@ use rust_decimal_macros::dec;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::{mpsc, Mutex};
-use tracing::{info, Level};
+use tracing::{error, info, Level};
 use tracing_subscriber::FmtSubscriber;
 
 #[tokio::main]
@@ -47,58 +47,66 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let books_clone_signal = order_books.clone();
     let prices_clone_signal = last_known_prices.clone();
 
+    // 📡 لیسنر دریافت سیگنال و کاشت اردر
     tokio::spawn(async move {
         if let Ok(client) = redis::Client::open(redis_url_sub.as_str()) {
             if let Ok(mut pubsub) = client.get_async_pubsub().await {
                 let _ = pubsub.subscribe("market:scalp_signals").await;
-                info!("Subscribed to Canonical Scalp Signals stream.");
+                info!("Subscribed to market:scalp_signals successfully.");
 
                 use futures_util::StreamExt;
                 let mut stream = pubsub.on_message();
 
                 while let Some(msg) = stream.next().await {
                     let payload: String = msg.get_payload().unwrap_or_default();
-                    if let Ok(signal) = serde_json::from_str::<CanonicalSignalPayload>(&payload) {
-                        let symbol = &signal.symbol;
+                    match serde_json::from_str::<CanonicalSignalPayload>(&payload) {
+                        Ok(signal) => {
+                            let symbol = &signal.symbol;
 
-                        let live_price = {
-                            let prices = prices_clone_signal.lock().await;
-                            prices.get(symbol).cloned().unwrap_or(signal.signal_price)
-                        };
+                            let live_price = {
+                                let prices = prices_clone_signal.lock().await;
+                                prices.get(symbol).cloned().unwrap_or(signal.signal_price)
+                            };
 
-                        let audit = MicrosecondAudit {
-                            exchange_ts: Utc::now(),
-                            receive_ts: Utc::now(),
-                            process_ts: Utc::now(),
-                            decision_ts: Some(Utc::now()),
-                            submit_ts: None,
-                            fill_ts: None,
-                        };
+                            let audit = MicrosecondAudit {
+                                exchange_ts: Utc::now(),
+                                receive_ts: Utc::now(),
+                                process_ts: Utc::now(),
+                                decision_ts: Some(Utc::now()),
+                                submit_ts: None,
+                                fill_ts: None,
+                            };
 
-                        let metrics = {
-                            let mut books = books_clone_signal.lock().await;
-                            match books.get_mut(symbol).and_then(|b| b.compute_metrics(audit.clone())) {
-                                Some(m) => m,
-                                None => OrderBookMetrics {
-                                    symbol: symbol.to_string(),
-                                    best_bid: live_price - dec!(0.1),
-                                    best_ask: live_price + dec!(0.1),
-                                    spread_bps: 0.50,
-                                    mid_price: live_price,
-                                    micro_price: live_price,
-                                    ofi: 0.0,
-                                    ofi_zscore: 0.0,
-                                    book_imbalance_top10: 0.0,
-                                    imbalance_top10: 0.0,
-                                    realized_vol_60s_bps: 1.0,
-                                    timestamp: Utc::now(),
-                                    audit,
-                                },
+                            let metrics = {
+                                let mut books = books_clone_signal.lock().await;
+                                match books.get_mut(symbol).and_then(|b| b.compute_metrics(audit.clone())) {
+                                    Some(m) => m,
+                                    None => OrderBookMetrics {
+                                        symbol: symbol.to_string(),
+                                        best_bid: live_price - dec!(0.1),
+                                        best_ask: live_price + dec!(0.1),
+                                        spread_bps: 0.50,
+                                        mid_price: live_price,
+                                        micro_price: live_price,
+                                        ofi: 0.0,
+                                        ofi_zscore: 0.0,
+                                        book_imbalance_top10: 0.0,
+                                        imbalance_top10: 0.0,
+                                        realized_vol_60s_bps: 1.0,
+                                        timestamp: Utc::now(),
+                                        audit,
+                                    },
+                                }
+                            };
+
+                            let mut engine = engine_clone_signal.lock().await;
+                            if let Some(order) = engine.handle_signal(&signal, &metrics) {
+                                info!(symbol = %order.symbol, side = ?order.side, price = %order.limit_price, "📥 Maker Limit Order PLACED in OrderBook");
                             }
-                        };
-
-                        let mut engine = engine_clone_signal.lock().await;
-                        let _ = engine.handle_signal(&signal, &metrics);
+                        }
+                        Err(e) => {
+                            error!("Deserialization Error on Signal Payload: {}", e);
+                        }
                     }
                 }
             }
@@ -137,9 +145,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 };
 
                 let mut engine = execution_engine.lock().await;
-                let _ = engine.on_market_tick(&trade.symbol, trade.price, micro_price);
+                if let Some(pos) = engine.on_market_tick(&trade.symbol, trade.price, micro_price) {
+                    info!(symbol = %pos.symbol, entry = %pos.entry_price, tp = %pos.target_tp_price, sl = %pos.target_sl_price, "⚡ Position FILLED! Monitoring Targets...");
+                }
 
                 if let Some(record) = engine.evaluate_exit(&trade.symbol, best_bid, best_ask) {
+                    info!(symbol = %record.symbol, reason = %record.exit_reason, pnl = %record.net_pnl, "💰 Position CLOSED with Realized PnL");
                     if let Some(mut r) = redis_pub.clone() {
                         let record_json = serde_json::to_value(&record).unwrap_or_default();
                         let _ = r.publish_json("market:trade_ledger", &record_json).await;

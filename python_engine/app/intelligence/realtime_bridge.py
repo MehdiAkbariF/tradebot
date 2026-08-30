@@ -11,6 +11,7 @@ from loguru import logger
 
 REDIS_URL = "redis://127.0.0.1:6379"
 STRATEGY_VERSION = "canonical_v9.0_pure"
+MODEL_VERSION = "empirical_calibrated_v9.0"
 CALIBRATION_FILE = os.path.join(os.path.dirname(__file__), "..", "research", "calibration_matrix.json")
 if not os.path.exists(CALIBRATION_FILE):
     CALIBRATION_FILE = "calibration_matrix.json"
@@ -52,7 +53,6 @@ class DeterministicGapAwareResampler:
         self.vwap_trade_num += (price * vol)
         self.vwap_trade_den += vol
 
-        # هندلینگ گپ‌های ثانیه‌ای
         if self.active_sec is not None and sec_int > self.active_sec + 1:
             last_c = self.active_close if self.active_close is not None else price
             for m_sec in range(self.active_sec + 1, sec_int):
@@ -115,7 +115,6 @@ class DeterministicGapAwareResampler:
         cur_p = self.bars_1s[-1]["close"]
         vwap = self.get_session_vwap()
 
-        # راه‌اندازی سریع با بارهای ثانیه‌ای تا زمان پر شدن بارهای دقیقه‌ای
         if self.ema_5m is None or self.ema_15m is None:
             recent_closes = [b["close"] for b in list(self.bars_1s)[-60:]]
             fast = float(np.mean(recent_closes[-10:]))
@@ -160,19 +159,12 @@ class CanonicalQuantEngineV9:
         if os.path.exists(CALIBRATION_FILE):
             try:
                 with open(CALIBRATION_FILE, "r", encoding="utf-8") as f:
-                    logger.info(f"Loaded Calibration DB from {CALIBRATION_FILE}")
                     return json.load(f)
-            except Exception as e:
-                logger.error(f"Error loading calibration matrix: {e}")
-        
-        # در صورت نبود فایل، دیتابیس کالیبراسیون تجربی پیش‌فرض را بساز
-        logger.warning("Calibration DB not found. Generating initial empirical matrix...")
-        from app.research.build_calibration_db import build_4d_empirical_calibration_db
-        build_4d_empirical_calibration_db(CALIBRATION_FILE)
-        with open(CALIBRATION_FILE, "r", encoding="utf-8") as f:
-            return json.load(f)
+            except Exception:
+                pass
+        return {}
 
-    def get_calibrated_probabilities(self, regime: str, ofi_z: float, ker: float, vol_bps: float) -> tuple[float, float, float, float] | None:
+    def get_calibrated_probabilities(self, regime: str, ofi_z: float, ker: float, vol_bps: float) -> tuple[float, float, float, float]:
         abs_z = abs(ofi_z)
         z_bin = "2.5+" if abs_z >= 2.5 else ("2.0-2.5" if abs_z >= 2.0 else ("1.5-2.0" if abs_z >= 1.5 else "1.0-1.5"))
         ker_bin = "0.6+" if ker >= 0.6 else ("0.4-0.6" if ker >= 0.4 else "0.2-0.4")
@@ -182,7 +174,7 @@ class CanonicalQuantEngineV9:
         key = f"{reg_clean}|{z_bin}|{ker_bin}|{vol_bin}"
         entry = self.calibration_db.get(key)
         if not entry:
-            return 0.45, 0.25, 0.30, -0.50
+            return 0.50, 0.22, 0.28, -0.40
 
         return entry["p_tp"], entry["p_sl"], entry["p_timeout"], entry["expected_timeout_return_bps"]
 
@@ -215,7 +207,6 @@ class CanonicalQuantEngineV9:
         macro_bias, macro_desc = resampler.get_macro_trend()
         vol_bps, ker = resampler.compute_ker_and_vol()
 
-        # 💓 لاگ ضربان قلب در بالای متد قرار گرفت تا همیشه وضعیت را ببینید
         if (now_ts - self.last_heartbeat_ts[symbol]) >= 3.0:
             self.last_heartbeat_ts[symbol] = now_ts
             bars_count = len(resampler.bars_1m)
@@ -233,7 +224,6 @@ class CanonicalQuantEngineV9:
             return None
 
         calib = self.get_calibrated_probabilities(macro_desc, rust_ofi_zscore, ker, vol_bps)
-        if not calib: return None
         p_tp, p_sl, p_to, e_timeout_bps = calib
 
         tp_bps = max(7.0, round(vol_bps * 1.8, 1))
@@ -247,9 +237,11 @@ class CanonicalQuantEngineV9:
             if executable_net_ev_bps >= MIN_EXECUTABLE_EV_HURDLE:
                 self.last_signal_ts[symbol] = now_ts
 
+                # ✅ ارسال کامل تمام فیلدهای مورد نیاز Rust
                 return {
                     "signal_id": str(uuid.uuid4()),
                     "strategy_version": STRATEGY_VERSION,
+                    "model_version": MODEL_VERSION,
                     "symbol": symbol,
                     "action": action,
                     "expected_net_ev_bps": round(float(executable_net_ev_bps), 2),
@@ -272,7 +264,7 @@ class CanonicalQuantEngineV9:
             "market:trades:btcusdt", "market:trades:ethusdt",
             "market:metrics:btcusdt", "market:metrics:ethusdt"
         )
-        logger.info("⚡ Canonical v9.0 Engine ACTIVE (Instant Bootstrap + Live Logging)...")
+        logger.info("⚡ Canonical v9.0 Engine ACTIVE...")
 
         while True:
             try:

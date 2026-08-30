@@ -76,6 +76,7 @@ pub struct OrderBookMetrics {
 pub struct CanonicalSignalPayload {
     pub signal_id: String,
     pub strategy_version: String,
+    #[serde(default)]
     pub model_version: String,
     pub symbol: String,
     pub action: String,
@@ -83,8 +84,8 @@ pub struct CanonicalSignalPayload {
     pub p_tp: f64,
     pub p_sl: f64,
     pub p_timeout: f64,
-    pub tp_bps: Option<f64>,  // تارگت سود داینامیک
-    pub sl_bps: Option<f64>,  // حد ضرر داینامیک
+    pub tp_bps: Option<f64>,
+    pub sl_bps: Option<f64>,
     pub friction_bps: f64,
     pub signal_price: Decimal,
     pub timestamp: DateTime<Utc>,
