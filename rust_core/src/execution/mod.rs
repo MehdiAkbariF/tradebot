@@ -177,7 +177,7 @@ impl ExecutionEngine {
                 margin_allocated: filled_order.notional,
                 entry_fee,
                 opened_at: Utc::now(),
-                max_holding_sec: 20,
+                max_holding_sec: 300,
                 max_price_seen: filled_order.limit_price,
                 min_price_seen: filled_order.limit_price,
             };

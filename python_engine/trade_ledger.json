@@ -19,5 +19,26 @@
     "symbol": "ETHUSDT",
     "total_fee": "0.0070425208",
     "trade_id": "b38c0e8a-d0db-4fd3-a9e6-836115d52682"
+  },
+  {
+    "closed_at": "2026-08-30T10:42:25.353753600+00:00",
+    "entry_price": "78112.3",
+    "exit_price": "78110",
+    "exit_reason": "TIME_EXPIRATION \u23f1\ufe0f",
+    "gross_pnl": "-0.00023",
+    "latency_rtt_ms": 20213,
+    "mae_bps": 0.29444786544500673,
+    "margin_allocated": "7.81123",
+    "mfe_bps": 0.0,
+    "net_pnl": "-0.005697746",
+    "notional_usd": "7.81123",
+    "opened_at": "2026-08-30T10:42:05.140149500+00:00",
+    "pnl_bps": -7.294300641512284,
+    "quantity": "0.0001",
+    "side": "Buy",
+    "signal_id": "480a0785-d818-4e49-b6fc-5750178ac63f",
+    "symbol": "BTCUSDT",
+    "total_fee": "0.005467746",
+    "trade_id": "91009b4c-9f57-4b31-8830-636627671e59"
   }
 ]
