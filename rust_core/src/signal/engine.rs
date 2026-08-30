@@ -1,3 +1,4 @@
+// مسیر: rust_core/src/signal/engine.rs
 use crate::domain::portfolio::{SignalAction, SignalCandidate};
 use crate::domain::types::OrderBookMetrics;
 use chrono::Utc;
@@ -16,7 +17,6 @@ impl SignalEngine {
         }
     }
 
-    /// ارزیابی ترکیب خبر و وضعیت اردر بوک برای تولید سیگنال
     pub fn evaluate_signal(
         &self,
         symbol: &str,
@@ -26,17 +26,15 @@ impl SignalEngine {
     ) -> SignalCandidate {
         let mut reason_codes = Vec::new();
 
-        // 1. Check Spread Friction
         if metrics.spread_bps > self.max_spread_bps {
             reason_codes.push("HIGH_SPREAD_NO_TRADE".to_string());
             return self.no_trade_signal(symbol, reason_codes);
         }
 
-        // 2. Check Order Flow Imbalance (OFI) confirmation
         let ofi_confirmed = if is_positive_news {
-            metrics.imbalance_top10 > 0.15
+            metrics.book_imbalance_top10 > 0.15
         } else {
-            metrics.imbalance_top10 < -0.15
+            metrics.book_imbalance_top10 < -0.15
         };
 
         if !ofi_confirmed {
@@ -44,14 +42,12 @@ impl SignalEngine {
             return self.no_trade_signal(symbol, reason_codes);
         }
 
-        // 3. Evaluate Confidence
-        let confidence = (news_relevance + metrics.imbalance_top10.abs()) / 2.0;
+        let confidence = (news_relevance + metrics.book_imbalance_top10.abs()) / 2.0;
         if confidence < self.min_confidence {
             reason_codes.push("LOW_CONFIDENCE".to_string());
             return self.no_trade_signal(symbol, reason_codes);
         }
 
-        // 4. Generate Trade Action
         let action = if is_positive_news {
             reason_codes.push("POSITIVE_NEWS_WITH_OFI_BULLISH".to_string());
             SignalAction::Buy
@@ -61,7 +57,7 @@ impl SignalEngine {
         };
 
         SignalCandidate {
-            signal_id: Uuid::new_v4().to_string(), // اصلاح شده از toString به to_string
+            signal_id: Uuid::new_v4().to_string(),
             event_id: None,
             symbol: symbol.to_string(),
             action,
@@ -75,7 +71,7 @@ impl SignalEngine {
 
     fn no_trade_signal(&self, symbol: &str, reason_codes: Vec<String>) -> SignalCandidate {
         SignalCandidate {
-            signal_id: Uuid::new_v4().to_string(), // اصلاح شده از toString به to_string
+            signal_id: Uuid::new_v4().to_string(),
             event_id: None,
             symbol: symbol.to_string(),
             action: SignalAction::NoTrade,

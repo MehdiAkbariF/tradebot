@@ -1,7 +1,7 @@
 // مسیر: rust_core/src/market_data/binance.rs
 use crate::config::MarketDataSettings;
-use crate::domain::types::{DepthDelta, TradeTick};
-use crate::error::{AppError, Result};
+use crate::domain::types::{DepthDelta, MicrosecondAudit, TradeTick};
+use crate::error::Result;
 use chrono::Utc;
 use futures_util::{SinkExt, StreamExt};
 use reqwest::Client as HttpClient;
@@ -20,7 +20,7 @@ pub enum MarketEvent {
 
 pub struct BinanceClient {
     settings: MarketDataSettings,
-    http_client: HttpClient,
+    _http_client: HttpClient,
     event_tx: mpsc::Sender<MarketEvent>,
 }
 
@@ -28,22 +28,9 @@ impl BinanceClient {
     pub fn new(settings: MarketDataSettings, event_tx: mpsc::Sender<MarketEvent>) -> Self {
         Self {
             settings,
-            http_client: HttpClient::builder().timeout(Duration::from_secs(4)).build().unwrap_or_default(),
+            _http_client: HttpClient::builder().timeout(Duration::from_secs(4)).build().unwrap_or_default(),
             event_tx,
         }
-    }
-
-    pub async fn fetch_snapshot(&self, symbol: &str) -> Result<(u64, Vec<(rust_decimal::Decimal, rust_decimal::Decimal)>, Vec<(rust_decimal::Decimal, rust_decimal::Decimal)>)> {
-        let url = format!("{}/v5/market/orderbook?category=spot&symbol={}&limit=50", self.settings.binance_rest_url, symbol.to_uppercase());
-        let res = self.http_client.get(&url).send().await?.json::<Value>().await?;
-
-        let result_obj = &res["result"];
-        let ts = result_obj["ts"].as_u64().unwrap_or(0);
-
-        let bids = parse_bybit_levels(&result_obj["b"])?;
-        let asks = parse_bybit_levels(&result_obj["a"])?;
-
-        Ok((ts, bids, asks))
     }
 
     pub async fn run_stream(&self) {
@@ -59,7 +46,7 @@ impl BinanceClient {
             info!("Connecting to Bybit WebSocket: {}", ws_url);
             match connect_async(ws_url).await {
                 Ok((mut ws_stream, _)) => {
-                    info!("Successfully connected to Bybit WebSocket.");
+                    info!("Successfully connected to WebSocket.");
 
                     let sub_msg = json!({
                         "op": "subscribe",
@@ -97,7 +84,7 @@ impl BinanceClient {
                                 let _ = ws_stream.send(Message::Pong(p)).await;
                             }
                             Ok(Message::Close(_)) => {
-                                warn!("WebSocket server closed connection. Reconnecting...");
+                                warn!("WebSocket closed. Reconnecting...");
                                 break;
                             }
                             Err(e) => {
@@ -138,6 +125,15 @@ fn parse_bybit_trade(val: &Value, received_ts: chrono::DateTime<Utc>) -> Result<
     let side = val["S"].as_str().unwrap_or("");
     let is_buyer_maker = side == "Sell";
 
+    let audit = MicrosecondAudit {
+        exchange_ts: received_ts,
+        receive_ts: received_ts,
+        process_ts: Utc::now(),
+        decision_ts: None,
+        submit_ts: None,
+        fill_ts: None,
+    };
+
     Ok(TradeTick {
         symbol,
         trade_id: val["i"].as_str().and_then(|s| s.parse().ok()).unwrap_or(0),
@@ -146,16 +142,28 @@ fn parse_bybit_trade(val: &Value, received_ts: chrono::DateTime<Utc>) -> Result<
         is_buyer_maker,
         exchange_ts: received_ts,
         received_ts,
+        audit,
     })
 }
 
 fn parse_bybit_depth(val: &Value, received_ts: chrono::DateTime<Utc>) -> Result<DepthDelta> {
-    let symbol = val["s"].as_str().unwrap_or("BTCUSDT").to_string();
+    let topic = val["topic"].as_str().unwrap_or("");
+    let sym_from_topic = topic.split('.').last().unwrap_or("BTCUSDT").to_string();
     let data = &val["data"];
-    let update_id = data["u"].as_u64().unwrap_or(0);
+    let symbol = data["s"].as_str().map(|s| s.to_string()).unwrap_or(sym_from_topic);
+    let update_id = data["u"].as_u64().unwrap_or(1);
 
     let bids = parse_bybit_levels(&data["b"])?;
     let asks = parse_bybit_levels(&data["a"])?;
+
+    let audit = MicrosecondAudit {
+        exchange_ts: received_ts,
+        receive_ts: received_ts,
+        process_ts: Utc::now(),
+        decision_ts: None,
+        submit_ts: None,
+        fill_ts: None,
+    };
 
     Ok(DepthDelta {
         symbol,
@@ -165,5 +173,6 @@ fn parse_bybit_depth(val: &Value, received_ts: chrono::DateTime<Utc>) -> Result<
         asks,
         exchange_ts: received_ts,
         received_ts,
+        audit,
     })
 }

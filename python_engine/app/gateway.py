@@ -2,7 +2,6 @@
 import sys
 import os
 
-# تنظیم خودکار و قطعی مسیرهای پایتون برای رفع خطای ModuleNotFoundError
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 PYTHON_ENGINE_DIR = os.path.abspath(os.path.join(BASE_DIR, ".."))
 if PYTHON_ENGINE_DIR not in sys.path:
@@ -24,19 +23,17 @@ import redis.asyncio as aioredis
 from loguru import logger
 from starlette.websockets import WebSocketState
 
-# ایمپورت امن ماژول عیب‌یابی
 try:
     from app.diagnostics.engine import StrategyDiagnosticEngine
 except ImportError:
     try:
         from diagnostics.engine import StrategyDiagnosticEngine
     except ImportError:
-        # کلاس Fallback درون‌برنامه‌ای در صورت نبود فایل مجزا
         class StrategyDiagnosticEngine:
             def __init__(self, ledger_path): self.ledger_path = ledger_path
             def generate_full_report(self): return {"status": "INITIALIZING", "message": "Collecting trades..."}
 
-app = FastAPI(title="MI-EDTE Production Gateway & Diagnostics", version="4.1.0")
+app = FastAPI(title="MI-EDTE Production Gateway & Diagnostics", version="4.3.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -50,6 +47,8 @@ REDIS_URL = "redis://127.0.0.1:6379"
 LEDGER_FILE = os.path.abspath(os.path.join(BASE_DIR, "..", "trade_ledger.json"))
 
 trade_ledger = deque(maxlen=5000)
+recent_signals = deque(maxlen=20)
+recent_news = deque(maxlen=15) # 👈 حافظه زنده نگهداری اخبار
 diagnostic_engine = StrategyDiagnosticEngine(ledger_path=LEDGER_FILE)
 
 class CapitalConfigSchema(BaseModel):
@@ -69,7 +68,7 @@ def load_initial_ledger():
                     data = json.loads(content)
                     for item in data:
                         trade_ledger.append(item)
-            logger.info(f"Loaded {len(trade_ledger)} trades from: {LEDGER_FILE}")
+            logger.info(f"Loaded {len(trade_ledger)} trades into memory.")
         except Exception as e:
             logger.warning(f"Could not load ledger: {e}")
 
@@ -108,7 +107,6 @@ async def update_capital_config(cfg: CapitalConfigSchema):
     }
     await client.publish("config:capital_risk", json.dumps(payload))
     await client.close()
-    logger.success(f"Risk Config Updated: {payload}")
     return {"status": "SUCCESS", "config": current_config}
 
 @app.get("/api/diagnostics/report")
@@ -203,17 +201,24 @@ async def export_csv():
 async def redis_ledger_listener():
     client = aioredis.from_url(REDIS_URL, decode_responses=True)
     pubsub = client.pubsub()
-    await pubsub.subscribe("market:trade_ledger")
-    logger.info("Gateway listening to 'market:trade_ledger'...")
+    await pubsub.subscribe("market:trade_ledger", "market:scalp_signals", "events:news_raw")
+    logger.info("Gateway listening to ledger, signals, and live news streams...")
     
     while True:
         try:
             msg = await pubsub.get_message(ignore_subscribe_messages=True, timeout=0.1)
             if msg:
+                channel = msg["channel"]
                 data = json.loads(msg["data"])
-                persist_trade_atomic(data)
+                if channel == "market:trade_ledger":
+                    persist_trade_atomic(data)
+                elif channel == "market:scalp_signals":
+                    recent_signals.appendleft(data)
+                elif channel == "events:news_raw":
+                    payload = data if isinstance(data, dict) else json.loads(data)
+                    recent_news.appendleft(payload) # ذخیره خبر برای تحویل به داشبورد
             await asyncio.sleep(0.01)
-        except Exception:
+        except Exception as e:
             await asyncio.sleep(1.0)
 
 @app.on_event("startup")
@@ -230,8 +235,23 @@ async def live_terminal_websocket(websocket: WebSocket):
         "market:trades:btcusdt",
         "market:trades:ethusdt",
         "market:scalp_signals",
-        "market:positions"
+        "market:positions",
+        "events:news_raw"
     )
+
+    # ⚡ ۱. ارسال فوری تمام سیگنال‌های اخیر به محض باز شدن یا رفرش صفحه
+    for sig in list(recent_signals):
+        try:
+            await websocket.send_json({"channel": "market:scalp_signals", "data": sig})
+        except Exception:
+            pass
+
+    # ⚡ ۲. ارسال فوری تمام اخبار اخیر به محض باز شدن صفحه
+    for n in list(recent_news):
+        try:
+            await websocket.send_json({"channel": "events:news_raw", "data": n})
+        except Exception:
+            pass
 
     try:
         while True:

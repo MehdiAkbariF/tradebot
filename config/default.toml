@@ -15,14 +15,14 @@ redis_url = "redis://127.0.0.1:6379"
 enable_db_persistence = false
 
 [trading]
-initial_capital = 100.0           # 👈 تغییر از 100000 به 100 دلار واقعی
-notional_per_trade = 30.0         # 👈 حجم پیش‌فرض 30 دلار
-take_profit_bps = 14.0
-stop_loss_bps = 14.0
-breakeven_trigger_bps = 8.0
-max_holding_seconds = 120
-max_spread_bps = 2.0
+initial_capital = 100.0
+notional_per_trade = 30.0
+take_profit_bps = 60.0
+stop_loss_bps = 35.0
+breakeven_trigger_bps = 25.0
+max_holding_seconds = 900
+max_spread_bps = 3.0
 min_ml_confidence = 0.85
 maker_fee_bps = 2.0
-min_volatility_bps = 1.2
-maker_timeout_seconds = 5
+min_volatility_bps = 3.5
+maker_timeout_seconds = 10

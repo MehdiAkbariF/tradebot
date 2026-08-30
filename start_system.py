@@ -1,4 +1,4 @@
-# مسیر: /start_system.py
+# مسیر: g:\tradebot\start_system.py
 import subprocess
 import sys
 import os
@@ -7,7 +7,7 @@ import signal
 import socket
 from threading import Thread
 
-# فعال‌سازی پشتیبانی از رنگ‌های ANSI در ترمینال ویندوز
+# فعال‌سازی رنگ‌های ANSI در ترمینال
 os.system("")
 
 GREEN = "\033[92m"
@@ -24,7 +24,7 @@ processes = []
 IS_WIN = sys.platform.startswith("win")
 
 def free_port(port: int):
-    """آزادسازی خودکار پورت‌های اشغال‌شده"""
+    """آزادسازی خودکار پورت‌های اشغال‌شده در ویندوز"""
     if not IS_WIN:
         return
     try:
@@ -51,10 +51,10 @@ def is_port_in_use(port: int) -> bool:
         return s.connect_ex(("127.0.0.1", port)) == 0
 
 def wipe_ledgers():
-    """پاک‌سازی تمام استیتمنت‌ها برای تست جدید و کانونیکال"""
+    """پاک‌سازی لجرها برای تست آماری دقیق و تمیز"""
     print(f"\n{RED}{BOLD}[!] Wiping All Previous Trade Ledgers for Clean Audit...{RESET}")
     files_to_delete = [
-        "python_engine/trade_ledger.json",
+        os.path.join("python_engine", "trade_ledger.json"),
         "trade_ledger.json",
     ]
     for file in files_to_delete:
@@ -68,50 +68,46 @@ def wipe_ledgers():
 
 def check_preflight():
     print(f"\n{CYAN}{BOLD}======================================================{RESET}")
-    print(f"{CYAN}{BOLD}   🚀 MI-EDTE PRODUCTION FORWARD-TEST LAUNCHER 🚀    {RESET}")
+    print(f"{CYAN}{BOLD}   🚀 MI-EDTE PRODUCTION QUANT SCALPER LAUNCHER 🚀   {RESET}")
     print(f"{CYAN}{BOLD}======================================================{RESET}\n")
 
-    # ۱. اگر سوییچ --clean پاس داده شده بود، لاگ‌های قدیمی را پاک کن
     if "--clean" in sys.argv:
         wipe_ledgers()
 
-    # ۲. آزادسازی پورت‌ها
+    # آزادسازی پورت‌های مورد نیاز داشبورد و سرور
     free_port(3000)
     free_port(8000)
     time.sleep(1)
 
-    # ۳. بررسی وضعیت Redis
+    # بررسی ردیس
     if not is_port_in_use(6379):
-        print(f"{RED}[!] Redis is NOT running on port 6379!{RESET}")
-        print(f"{YELLOW}[*] Attempting to start Redis container...{RESET}")
+        print(f"{RED}[!] Redis is NOT active on port 6379!{RESET}")
         try:
-            subprocess.run(["docker", "run", "-d", "-p", "6379:6379", "--name", "miedte_redis", "redis:alpine"], shell=IS_WIN, check=True)
+            subprocess.run(["docker", "start", "trading_redis"], shell=IS_WIN, check=True)
             time.sleep(2)
-            print(f"{GREEN}[✓] Redis started successfully.{RESET}")
+            print(f"{GREEN}[✓] Redis container started successfully.{RESET}")
         except Exception:
-            print(f"{RED}[ERROR] Please start Redis manually!{RESET}")
+            print(f"{RED}[ERROR] Please ensure Redis is running on port 6379.{RESET}")
     else:
         print(f"{GREEN}[✓] Redis Server is active on port 6379.{RESET}")
 
-    # ۴. بررسی وجود مدل اولیه
+    # بررسی مدل اولیه
     model_path = os.path.join("python_engine", "scalp_lightgbm_model.txt")
     if not os.path.exists(model_path):
         print(f"{YELLOW}[*] Training fresh baseline LightGBM model...{RESET}")
         try:
-            subprocess.run([sys.executable, "app/research/feature_pipeline.py"], cwd="python_engine", shell=IS_WIN, check=True)
+            subprocess.run(["poetry", "run", "python", "app/research/train_model.py"], cwd="python_engine", shell=IS_WIN, check=True)
             print(f"{GREEN}[✓] Model trained and ready.{RESET}")
         except Exception as e:
             print(f"{RED}Model init warning: {e}{RESET}")
 
 def start_services():
     services = [
-        ("FASTAPI-GATEWAY",      [sys.executable, "app/gateway.py"], "python_engine", GREEN),
-        ("AI-SCALP-BRIDGE",      [sys.executable, "app/intelligence/realtime_bridge.py"], "python_engine", MAGENTA),
-        ("AI-SELF-LEARNING",     [sys.executable, "app/research/continual_learning.py"], "python_engine", PURPLE),
-        ("RSS-COLLECTOR",        [sys.executable, "app/collectors/rss_collector.py"], "python_engine", YELLOW),
-        # ⚡ اجرای راست در حالت بهینه شده پرسرعت Release
-        ("RUST-CORE",            ["cargo", "run", "--release"], "rust_core", CYAN),
-        ("NEXTJS-DASHBOARD",     ["npm", "run", "dev"], "dashboard", BLUE),
+        ("FASTAPI-GATEWAY",  ["poetry", "run", "uvicorn", "app.gateway:app", "--host", "127.0.0.1", "--port", "8000"], "python_engine", GREEN),
+        ("AI-SCALP-BRIDGE",  ["poetry", "run", "python", "app/intelligence/realtime_bridge.py"], "python_engine", MAGENTA),
+        ("RSS-COLLECTOR",    ["poetry", "run", "python", "app/collectors/rss_collector.py"], "python_engine", YELLOW),
+        ("RUST-CORE",        ["cargo", "run", "--release"], "rust_core", CYAN),
+        ("NEXTJS-DASHBOARD", ["npm", "run", "dev"], "dashboard", BLUE),
     ]
 
     for name, cmd, cwd, color in services:
@@ -130,9 +126,9 @@ def start_services():
         processes.append(p)
         t = Thread(target=log_stream, args=(p, name, color), daemon=True)
         t.start()
-        time.sleep(1.2)
+        time.sleep(1.5)
 
-    print(f"\n{GREEN}{BOLD}✨ All 6 Engine Components are ACTIVE & Synchronized!{RESET}")
+    print(f"\n{GREEN}{BOLD}✨ All Engine Components are ACTIVE & Synchronized!{RESET}")
     print(f"{GREEN}{BOLD}👉 Live Dashboard:     http://localhost:3000{RESET}")
     print(f"{GREEN}{BOLD}👉 Statement Audit:    http://localhost:3000/statement{RESET}")
     print(f"{CYAN}{BOLD}📊 Quant Diagnostics:  http://localhost:8000/api/diagnostics/report{RESET}")

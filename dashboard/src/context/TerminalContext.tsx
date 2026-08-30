@@ -11,11 +11,18 @@ export interface TradeTick {
 }
 
 export interface ScalpSignal {
+  signal_id?: string;
   symbol: string;
   action: string;
   probability: number;
-  trend_bias: number;
-  decayed_sentiment: number;
+  alpha_score?: number;
+  ofi?: number;
+  range_bps?: number;
+  price_drift_bps?: number;
+  is_volume_expanding?: boolean;
+  signal_price?: string;
+  trend_bias?: number;
+  decayed_sentiment?: number;
   timestamp: string;
 }
 
@@ -24,7 +31,7 @@ export interface NewsItem {
   title: string;
   url?: string;
   source_id?: string;
-  time: string;
+  time?: string;
 }
 
 export interface PositionUpdate {
@@ -62,7 +69,6 @@ export function TerminalProvider({ children }: { children: React.ReactNode }) {
 
   const wsRef = useRef<WebSocket | null>(null);
 
-  // خواندن بالانس واقعی تنظیم‌شده از API گیت‌وی
   useEffect(() => {
     fetch('http://localhost:8000/api/config/capital')
       .then((res) => res.json())
@@ -71,7 +77,7 @@ export function TerminalProvider({ children }: { children: React.ReactNode }) {
           setInitialCapital(Number(data.total_capital));
         }
       })
-      .catch((err) => console.error('Could not fetch capital on init', err));
+      .catch((err) => console.error('Could not fetch capital config', err));
   }, []);
 
   const syncCapital = (newCap: number) => {
@@ -87,12 +93,10 @@ export function TerminalProvider({ children }: { children: React.ReactNode }) {
 
       ws.onopen = () => {
         setIsConnected(true);
-        console.log('⚡ Unified Terminal WebSocket Connected');
       };
 
       ws.onclose = () => {
         setIsConnected(false);
-        console.log('Terminal WS Closed, reconnecting in 2s...');
         reconnectTimeout = setTimeout(connect, 2000);
       };
 
@@ -105,17 +109,17 @@ export function TerminalProvider({ children }: { children: React.ReactNode }) {
             const sym = data.symbol.toUpperCase();
             setTicks((prev) => ({ ...prev, [sym]: data }));
           } else if (channel === 'market:scalp_signals') {
-            setSignals((prev) => [data, ...prev.slice(0, 19)]);
+            setSignals((prev) => [data, ...prev.filter(s => s.signal_id !== data.signal_id).slice(0, 19)]);
           } else if (channel === 'events:news_raw') {
             const payload = typeof data === 'string' ? JSON.parse(data) : data;
             const newItem: NewsItem = {
               id: payload.id || Math.random().toString(),
               title: payload.title || 'Market Event',
               url: payload.url,
-              source_id: payload.source_id || 'News Feed',
+              source_id: payload.source_id || 'Crypto Feed',
               time: new Date().toLocaleTimeString(),
             };
-            setNews((prev) => [newItem, ...prev.filter(n => n.title !== newItem.title).slice(0, 9)]);
+            setNews((prev) => [newItem, ...prev.filter(n => n.title !== newItem.title).slice(0, 14)]);
           } else if (channel === 'market:positions') {
             setLastPositionEvent(data);
             setPositions((prev) => [data, ...prev.slice(0, 9)]);

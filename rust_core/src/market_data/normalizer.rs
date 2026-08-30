@@ -1,4 +1,5 @@
-use crate::domain::types::{DepthDelta, TradeTick};
+// مسیر: rust_core/src/market_data/normalizer.rs
+use crate::domain::types::{DepthDelta, MicrosecondAudit, TradeTick};
 use crate::error::{AppError, Result};
 use chrono::{DateTime, TimeZone, Utc};
 use rust_decimal::Decimal;
@@ -20,8 +21,16 @@ impl BinanceNormalizer {
 
         let is_buyer_maker = val["m"].as_bool().unwrap_or(false);
         let time_millis = val["T"].as_i64().ok_or_else(|| AppError::Protocol("Missing T field".into()))?;
-        let exchange_ts = Utc.timestamp_millis_opt(time_millis).single()
-            .unwrap_or(received_ts);
+        let exchange_ts = Utc.timestamp_millis_opt(time_millis).single().unwrap_or(received_ts);
+
+        let audit = MicrosecondAudit {
+            exchange_ts,
+            receive_ts: received_ts,
+            process_ts: Utc::now(),
+            decision_ts: None,
+            submit_ts: None,
+            fill_ts: None,
+        };
 
         Ok(TradeTick {
             symbol,
@@ -31,6 +40,7 @@ impl BinanceNormalizer {
             is_buyer_maker,
             exchange_ts,
             received_ts,
+            audit,
         })
     }
 
@@ -45,6 +55,15 @@ impl BinanceNormalizer {
         let bids = Self::parse_levels(&val["b"])?;
         let asks = Self::parse_levels(&val["a"])?;
 
+        let audit = MicrosecondAudit {
+            exchange_ts,
+            receive_ts: received_ts,
+            process_ts: Utc::now(),
+            decision_ts: None,
+            submit_ts: None,
+            fill_ts: None,
+        };
+
         Ok(DepthDelta {
             symbol,
             first_update_id,
@@ -53,6 +72,7 @@ impl BinanceNormalizer {
             asks,
             exchange_ts,
             received_ts,
+            audit,
         })
     }
 

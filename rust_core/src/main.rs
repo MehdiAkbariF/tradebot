@@ -1,8 +1,9 @@
 // مسیر: rust_core/src/main.rs
+use chrono::Utc;
 use rust_core::config::Settings;
 use rust_core::domain::book::OrderBook;
-use rust_core::domain::types::{CanonicalSignalPayload, OrderBookMetrics};
-use rust_core::execution::HighFrequencyScalpExecutor;
+use rust_core::domain::types::{CanonicalSignalPayload, MicrosecondAudit, OrderBookMetrics};
+use rust_core::execution::ExecutionEngine;
 use rust_core::market_data::binance::{BinanceClient, MarketEvent};
 use rust_core::storage::redis::RedisPublisher;
 use rust_decimal::Decimal;
@@ -18,7 +19,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let subscriber = FmtSubscriber::builder().with_max_level(Level::INFO).finish();
     tracing::subscriber::set_global_default(subscriber)?;
 
-    info!("Starting MI-EDTE Fully-Instrumented Research & Execution Engine...");
+    info!("Starting MI-EDTE Production Quantitative Core Engine (Canonical v9.0)...");
 
     let settings = Settings::new()?;
     let mut redis_pub = RedisPublisher::new(&settings.storage.redis_url).await.ok();
@@ -32,35 +33,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         order_books.lock().await.insert(s.to_uppercase(), book);
     }
 
-    let scalp_executor = Arc::new(Mutex::new(HighFrequencyScalpExecutor::new(&settings.trading)));
-
-    // ⚡ ۱. استعلام و همگام‌سازی خودکار تنظیمات سرمایه از گیت‌وی در لحظه روشن شدن (Boot Sync)
-    let executor_bootstrap = scalp_executor.clone();
-    tokio::spawn(async move {
-        let client = reqwest::Client::builder()
-            .timeout(std::time::Duration::from_secs(3))
-            .build()
-            .unwrap_or_default();
-        
-        // چند تلاش تکرار در صورت روشن شدن همزمان سرویس‌ها
-        for _ in 0..6 {
-            if let Ok(res) = client.get("http://127.0.0.1:8000/api/config/capital").send().await {
-                if let Ok(val) = res.json::<serde_json::Value>().await {
-                    let cap = val["total_capital"].as_str().and_then(|s| s.parse::<Decimal>().ok())
-                        .or_else(|| val["total_capital"].as_f64().and_then(|f| Decimal::from_f64_retain(f)));
-                    let alloc = val["allocation_pct"].as_f64().and_then(|f| Decimal::from_f64_retain(f));
-                    let lev = val["leverage"].as_f64().and_then(|f| Decimal::from_f64_retain(f));
-                    let kill = val["kill_switch"].as_bool();
-
-                    let mut executor = executor_bootstrap.lock().await;
-                    executor.update_risk_config(cap, alloc, lev, kill);
-                    info!("✅ Bootstrapped dynamic risk parameters directly from Gateway API!");
-                    break;
-                }
-            }
-            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-        }
-    });
+    let execution_engine = Arc::new(Mutex::new(ExecutionEngine::new(&settings.trading)));
 
     let (event_tx, mut event_rx) = mpsc::channel::<MarketEvent>(settings.market_data.channel_buffer_size);
     let binance_client = BinanceClient::new(settings.market_data.clone(), event_tx);
@@ -70,16 +43,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     });
 
     let redis_url_sub = settings.storage.redis_url.clone();
-    let executor_clone_signal = scalp_executor.clone();
+    let engine_clone_signal = execution_engine.clone();
     let books_clone_signal = order_books.clone();
     let prices_clone_signal = last_known_prices.clone();
 
-    // ۲. لیسنر دریافت سیگنال با ردیابی شناسه سیگنال
     tokio::spawn(async move {
         if let Ok(client) = redis::Client::open(redis_url_sub.as_str()) {
             if let Ok(mut pubsub) = client.get_async_pubsub().await {
                 let _ = pubsub.subscribe("market:scalp_signals").await;
-                info!("Subscribed to Canonical Scalp Signals.");
+                info!("Subscribed to Canonical Scalp Signals stream.");
 
                 use futures_util::StreamExt;
                 let mut stream = pubsub.on_message();
@@ -91,68 +63,48 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                         let live_price = {
                             let prices = prices_clone_signal.lock().await;
-                            prices.get(symbol).cloned()
+                            prices.get(symbol).cloned().unwrap_or(signal.signal_price)
                         };
 
-                        let current_price = match live_price {
-                            Some(p) if p > dec!(0.0) => p,
-                            _ => continue,
+                        let audit = MicrosecondAudit {
+                            exchange_ts: Utc::now(),
+                            receive_ts: Utc::now(),
+                            process_ts: Utc::now(),
+                            decision_ts: Some(Utc::now()),
+                            submit_ts: None,
+                            fill_ts: None,
                         };
 
-                        let mut books = books_clone_signal.lock().await;
-                        let metrics = if let Some(book) = books.get_mut(symbol) {
-                            book.compute_metrics().unwrap_or(OrderBookMetrics {
-                                symbol: symbol.to_string(),
-                                best_bid: current_price - dec!(0.1),
-                                best_ask: current_price + dec!(0.1),
-                                spread_bps: 0.15,
-                                mid_price: current_price,
-                                micro_price: current_price,
-                                imbalance_top10: if signal.action == "BUY" { 0.25 } else { -0.25 },
-                                timestamp: chrono::Utc::now(),
-                            })
-                        } else {
-                            continue;
+                        let metrics = {
+                            let mut books = books_clone_signal.lock().await;
+                            match books.get_mut(symbol).and_then(|b| b.compute_metrics(audit.clone())) {
+                                Some(m) => m,
+                                None => OrderBookMetrics {
+                                    symbol: symbol.to_string(),
+                                    best_bid: live_price - dec!(0.1),
+                                    best_ask: live_price + dec!(0.1),
+                                    spread_bps: 0.50,
+                                    mid_price: live_price,
+                                    micro_price: live_price,
+                                    ofi: 0.0,
+                                    ofi_zscore: 0.0,
+                                    book_imbalance_top10: 0.0,
+                                    imbalance_top10: 0.0,
+                                    realized_vol_60s_bps: 1.0,
+                                    timestamp: Utc::now(),
+                                    audit,
+                                },
+                            }
                         };
 
-                        let mut executor = executor_clone_signal.lock().await;
-                        let _ = executor.place_maker_order(&signal, &metrics);
+                        let mut engine = engine_clone_signal.lock().await;
+                        let _ = engine.handle_signal(&signal, &metrics);
                     }
                 }
             }
         }
     });
 
-    // ۳. لیسنر تغییرات لحظه‌ای ریسک و سرمایه از فرانت‌اند
-    let redis_url_cfg = settings.storage.redis_url.clone();
-    let executor_clone_cfg = scalp_executor.clone();
-    tokio::spawn(async move {
-        if let Ok(client) = redis::Client::open(redis_url_cfg.as_str()) {
-            if let Ok(mut pubsub) = client.get_async_pubsub().await {
-                let _ = pubsub.subscribe("config:capital_risk").await;
-                info!("Listening for Capital & Risk telemetry...");
-
-                use futures_util::StreamExt;
-                let mut stream = pubsub.on_message();
-
-                while let Some(msg) = stream.next().await {
-                    let payload: String = msg.get_payload().unwrap_or_default();
-                    if let Ok(val) = serde_json::from_str::<serde_json::Value>(&payload) {
-                        let cap = val["total_capital"].as_str().and_then(|s| s.parse::<Decimal>().ok())
-                            .or_else(|| val["total_capital"].as_f64().and_then(|f| Decimal::from_f64_retain(f)));
-                        let alloc = val["allocation_pct"].as_f64().and_then(|f| Decimal::from_f64_retain(f));
-                        let lev = val["leverage"].as_f64().and_then(|f| Decimal::from_f64_retain(f));
-                        let kill = val["kill_switch"].as_bool();
-
-                        let mut executor = executor_clone_cfg.lock().await;
-                        executor.update_risk_config(cap, alloc, lev, kill);
-                    }
-                }
-            }
-        }
-    });
-
-    // ۴. پردازش تیک‌ها، به‌روزرسانی MFE / MAE و ثبت خروجی‌ها
     while let Some(event) = event_rx.recv().await {
         match event {
             MarketEvent::Trade(trade) => {
@@ -162,29 +114,32 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     let _ = r.publish_trade(&trade).await;
                 }
 
-                let mut executor = scalp_executor.lock().await;
-
-                // ردیابی دائمی مسیر قیمت جهت محاسبه MFE / MAE
-                executor.update_path_dependency(&trade.symbol, trade.price);
-
-                // ارزیابی پر شدن سفارش
-                let current_spread = 0.25;
-                if let Some(pos) = executor.process_pending_orders_and_fills(&trade.symbol, trade.price, current_spread) {
-                    if let Some(mut r) = redis_pub.clone() {
-                        let pos_event = serde_json::json!({
-                            "position_id": pos.position_id,
-                            "signal_id": pos.signal_id,
-                            "symbol": trade.symbol,
-                            "action": if pos.is_buy { "BUY" } else { "SELL" },
-                            "entry_price": pos.entry_price,
-                            "pnl": 0.0
-                        });
-                        let _ = r.publish_json("market:positions", &pos_event).await;
+                let (micro_price, best_bid, best_ask) = {
+                    let mut books = order_books.lock().await;
+                    if let Some(book) = books.get_mut(&trade.symbol) {
+                        let bb = book.best_bid();
+                        let ba = book.best_ask();
+                        let micro = match (bb, ba) {
+                            (Some((bb_p, bb_q)), Some((ba_p, ba_q))) => {
+                                let tot = bb_q + ba_q;
+                                if tot > dec!(0.0) {
+                                    (ba_q * bb_p + bb_q * ba_p) / tot
+                                } else {
+                                    trade.price
+                                }
+                            }
+                            _ => trade.price,
+                        };
+                        (micro, bb.map(|b| b.0).unwrap_or(trade.price), ba.map(|a| a.0).unwrap_or(trade.price))
+                    } else {
+                        (trade.price, trade.price, trade.price)
                     }
-                }
-                
-                // ارزیابی خروج و انتشار گزارش به دیتابیس لجر
-                if let Some(record) = executor.evaluate_open_positions(&trade.symbol, trade.price, trade.price) {
+                };
+
+                let mut engine = execution_engine.lock().await;
+                let _ = engine.on_market_tick(&trade.symbol, trade.price, micro_price);
+
+                if let Some(record) = engine.evaluate_exit(&trade.symbol, best_bid, best_ask) {
                     if let Some(mut r) = redis_pub.clone() {
                         let record_json = serde_json::to_value(&record).unwrap_or_default();
                         let _ = r.publish_json("market:trade_ledger", &record_json).await;
@@ -209,7 +164,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let mut books = order_books.lock().await;
                 if let Some(book) = books.get_mut(&delta.symbol) {
                     let _ = book.apply_delta(&delta);
-                    if let Some(metrics) = book.compute_metrics() {
+                    let audit = MicrosecondAudit {
+                        exchange_ts: delta.exchange_ts,
+                        receive_ts: delta.received_ts,
+                        process_ts: Utc::now(),
+                        decision_ts: None,
+                        submit_ts: None,
+                        fill_ts: None,
+                    };
+                    if let Some(metrics) = book.compute_metrics(audit) {
                         if let Some(ref mut r) = redis_pub {
                             let _ = r.publish_metrics(&metrics).await;
                         }

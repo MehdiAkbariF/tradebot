@@ -1,3 +1,4 @@
+// مسیر: rust_core/src/storage/postgres.rs
 use crate::domain::types::{OrderBookMetrics, TradeTick};
 use crate::error::Result;
 use sqlx::postgres::PgPoolOptions;
@@ -9,8 +10,8 @@ pub struct PostgresStore {
 }
 
 impl PostgresStore {
- pub async fn new(database_url: &str) -> Result<Self> {
-        tracing::info!("Attempting to connect to PostgreSQL with URL: {}", database_url);
+    pub async fn new(database_url: &str) -> Result<Self> {
+        tracing::info!("Connecting to PostgreSQL: {}", database_url);
         let pool = PgPoolOptions::new()
             .max_connections(10)
             .connect(database_url)
@@ -29,8 +30,8 @@ impl PostgresStore {
         .bind(&tick.price)
         .bind(&tick.quantity)
         .bind(&tick.is_buyer_maker)
-        .bind(&tick.exchange_ts)
-        .bind(&tick.received_ts)
+        .bind(&tick.audit.exchange_ts)
+        .bind(&tick.audit.receive_ts)
         .execute(&self.pool)
         .await?;
 
@@ -50,7 +51,7 @@ impl PostgresStore {
         .bind(&metrics.spread_bps)
         .bind(&metrics.mid_price)
         .bind(&metrics.micro_price)
-        .bind(&metrics.imbalance_top10)
+        .bind(&metrics.book_imbalance_top10)
         .bind(&metrics.timestamp)
         .execute(&self.pool)
         .await?;

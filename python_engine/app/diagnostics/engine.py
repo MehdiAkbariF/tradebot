@@ -3,156 +3,115 @@ import json
 import os
 import numpy as np
 import pandas as pd
-from datetime import datetime
 from loguru import logger
 
 class StrategyDiagnosticEngine:
     def __init__(self, ledger_path: str):
         self.ledger_path = os.path.abspath(ledger_path)
 
-    def load_trades(self) -> pd.DataFrame:
+    def load_canonical_ledger(self) -> pd.DataFrame:
         if not os.path.exists(self.ledger_path):
             return pd.DataFrame()
         try:
             with open(self.ledger_path, "r", encoding="utf-8") as f:
                 data = json.load(f)
-            if not data:
-                return pd.DataFrame()
-            return pd.DataFrame(data)
+            return pd.DataFrame(data) if data else pd.DataFrame()
         except Exception as e:
-            logger.error(f"Error loading ledger for diagnostics: {e}")
+            logger.error(f"Error loading canonical ledger: {e}")
             return pd.DataFrame()
 
     def generate_full_report(self) -> dict:
-        df = self.load_trades()
+        df = self.load_canonical_ledger()
         if df.empty:
-            return {"status": "NO_DATA", "message": "Ledger is empty. Run paper trading to collect samples."}
+            return {"status": "AWAITING_DATA", "message": "Accumulating audited executions from live market."}
 
-        # تبدیل انواع داده
-        numeric_cols = [
-            "gross_pnl", "net_pnl", "total_fee", "duration_seconds",
-            "mfe_bps", "mae_bps", "slippage_bps", "model_confidence",
-            "alpha_at_signal", "ofi_at_signal", "range_at_signal_bps"
+        numeric_fields = [
+            "gross_pnl", "net_pnl", "total_fee", "pnl_bps", 
+            "mfe_bps", "mae_bps", "expected_net_ev_bps", "duration_seconds"
         ]
-        for col in numeric_cols:
-            if col in df.columns:
-                df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0.0)
+        for f in numeric_fields:
+            if f in df.columns:
+                df[f] = pd.to_numeric(df[f], errors="coerce").fillna(0.0)
 
         total_trades = len(df)
-        wins = df[df["net_pnl"] > 0]
-        losses = df[df["net_pnl"] < 0]
-        scratches = df[df["net_pnl"] == 0]
-
-        gross_pnl = df["gross_pnl"].sum()
-        total_fees = df["total_fee"].sum()
-        net_pnl = df["net_pnl"].sum()
+        wins = df[df["net_pnl"] > 0.0]
+        losses = df[df["net_pnl"] < 0.0]
+        timeouts = df[df["exit_reason"].str.contains("TIME_EXPIRATION", na=False)]
+        tp_hits = df[df["exit_reason"].str.contains("TP", na=False)]
+        sl_hits = df[df["exit_reason"].str.contains("STOP_LOSS", na=False)]
 
         win_rate = (len(wins) / total_trades) * 100.0 if total_trades > 0 else 0.0
-        profit_factor = (wins["net_pnl"].sum() / abs(losses["net_pnl"].sum())) if len(losses) > 0 and losses["net_pnl"].sum() != 0 else float("inf")
+        gross_alpha_usd = float(df["gross_pnl"].sum())
+        total_friction_usd = float(df["total_fee"].sum())
+        net_realized_usd = float(df["net_pnl"].sum())
 
-        # امید ریاضی (Expectancy) قبل و بعد از هزینه
-        avg_win_net = wins["net_pnl"].mean() if len(wins) > 0 else 0.0
-        avg_loss_net = abs(losses["net_pnl"].mean()) if len(losses) > 0 else 0.0
-        net_expectancy = ((len(wins) / total_trades) * avg_win_net) - ((len(losses) / total_trades) * avg_loss_net)
+        sum_wins = float(wins["net_pnl"].sum())
+        sum_losses = abs(float(losses["net_pnl"].sum()))
+        profit_factor = (sum_wins / sum_losses) if sum_losses > 0 else (sum_wins if sum_wins > 0 else 0.0)
 
-        avg_win_gross = wins["gross_pnl"].mean() if len(wins) > 0 else 0.0
-        avg_loss_gross = abs(losses["gross_pnl"].mean()) if len(losses) > 0 else 0.0
-        gross_expectancy = ((len(wins) / total_trades) * avg_win_gross) - ((len(losses) / total_trades) * avg_loss_gross)
+        realized_pnl_bps = df["pnl_bps"].values if "pnl_bps" in df.columns else np.zeros(total_trades)
+        mean_realized_bps = float(np.mean(realized_pnl_bps)) if len(realized_pnl_bps) > 0 else 0.0
+        std_realized_bps = float(np.std(realized_pnl_bps)) if len(realized_pnl_bps) > 1 else 1e-6
 
-        # تحلیل MFE / MAE
-        avg_mfe = df["mfe_bps"].mean() if "mfe_bps" in df.columns else 0.0
-        avg_mae = df["mae_bps"].mean() if "mae_bps" in df.columns else 0.0
+        predicted_ev_bps = float(df["expected_net_ev_bps"].mean()) if "expected_net_ev_bps" in df.columns else 0.0
+        calibration_error_bps = round(abs(predicted_ev_bps - mean_realized_bps), 2)
 
-        # ۱. تفکیک عملکرد بر اساس دلایل خروج (Exit Attribution)
-        exit_breakdown = {}
-        if "exit_reason" in df.columns:
-            for reason, group in df.groupby("exit_reason"):
-                exit_breakdown[reason] = {
-                    "count": len(group),
-                    "win_rate": round((len(group[group["net_pnl"] > 0]) / len(group)) * 100.0, 2),
-                    "net_pnl": round(float(group["net_pnl"].sum()), 2),
-                    "avg_mfe_bps": round(float(group["mfe_bps"].mean()), 2) if "mfe_bps" in group.columns else 0.0,
-                    "avg_mae_bps": round(float(group["mae_bps"].mean()), 2) if "mae_bps" in group.columns else 0.0,
-                }
-
-        # ۲. تفکیک بر اساس نماد معاملاتی (Symbol Attribution)
-        symbol_breakdown = {}
-        if "symbol" in df.columns:
-            for sym, group in df.groupby("symbol"):
-                symbol_breakdown[sym] = {
-                    "trades": len(group),
-                    "win_rate": round((len(group[group["net_pnl"] > 0]) / len(group)) * 100.0, 2),
-                    "net_pnl": round(float(group["net_pnl"].sum()), 2),
-                    "expectancy": round(float(group["net_pnl"].mean()), 4),
-                }
-
-        # ۳. تفکیک جهت معامله (Directional Attribution)
-        direction_breakdown = {}
-        if "action" in df.columns:
-            for act, group in df.groupby("action"):
-                direction_breakdown[act] = {
-                    "trades": len(group),
-                    "win_rate": round((len(group[group["net_pnl"] > 0]) / len(group)) * 100.0, 2),
-                    "net_pnl": round(float(group["net_pnl"].sum()), 2),
-                }
-
-        # ۴. تحلیل کالیبراسیون اطمینان (Confidence Calibration)
-        confidence_calibration = {}
-        if "model_confidence" in df.columns:
-            bins = [0.5, 0.6, 0.7, 0.8, 0.9, 0.95, 1.01]
-            labels = ["50-60%", "60-70%", "70-80%", "80-90%", "90-95%", "95-100%"]
-            df["conf_bin"] = pd.cut(df["model_confidence"], bins=bins, labels=labels, right=False)
-            for b_name, group in df.groupby("conf_bin", observed=False):
+        # ماتریس کالیبراسیون باکت‌بندی‌شده
+        bins = [1.0, 1.5, 2.0, 2.5, 3.0, 3.5, 100.0]
+        labels = ["1.0-1.5", "1.5-2.0", "2.0-2.5", "2.5-3.0", "3.0-3.5", "3.5+"]
+        
+        binned_calibration = {}
+        if "expected_net_ev_bps" in df.columns:
+            df["ev_bucket"] = pd.cut(df["expected_net_ev_bps"], bins=bins, labels=labels, right=False)
+            for b_label, group in df.groupby("ev_bucket", observed=False):
                 if len(group) > 0:
-                    w_rate = (len(group[group["net_pnl"] > 0]) / len(group)) * 100.0
-                    confidence_calibration[str(b_name)] = {
+                    group_wins = group[group["net_pnl"] > 0.0]
+                    binned_calibration[str(b_label)] = {
                         "trades": len(group),
-                        "observed_win_rate": round(w_rate, 2),
-                        "expectancy": round(float(group["net_pnl"].mean()), 4)
+                        "predicted_ev": round(float(group["expected_net_ev_bps"].mean()), 2),
+                        "realized_ev": round(float(group["pnl_bps"].mean()), 2),
+                        "win_rate": round((len(group_wins) / len(group)) * 100.0, 1),
+                        "avg_mfe_directional": round(float(group["mfe_bps"].mean()), 1),
+                        "avg_mae_directional": round(float(group["mae_bps"].mean()), 1)
                     }
 
-        # ۵. تحلیل آماری تایم‌اوت‌ها (TIME_EXPIRATION Deep Dive)
-        timeout_trades = df[df["exit_reason"].str.contains("TIME_EXPIRATION", na=False)] if "exit_reason" in df.columns else pd.DataFrame()
-        timeout_stats = {}
-        if not timeout_trades.empty:
-            timeout_stats = {
-                "count": len(timeout_trades),
-                "ratio_of_total": round((len(timeout_trades) / total_trades) * 100.0, 2),
-                "total_loss": round(float(timeout_trades["net_pnl"].sum()), 2),
-                "avg_mfe_bps": round(float(timeout_trades["mfe_bps"].mean()), 2) if "mfe_bps" in timeout_trades.columns else 0.0,
-                "avg_mae_bps": round(float(timeout_trades["mae_bps"].mean()), 2) if "mae_bps" in timeout_trades.columns else 0.0,
-            }
-
-        # ۶. عیب‌یابی علت حاکم (Dominant Failure Mode Classification)
-        failure_mode = "NONE (Profitable Edge Proven)"
         if total_trades < 100:
-            failure_mode = "INSUFFICIENT_DATA (Need >= 300 samples for statistical validity)"
-        elif gross_pnl > 0 and net_pnl <= 0:
-            failure_mode = "EXECUTION_ECONOMICS (Edge exists before fees, but fee/slippage destroys it)"
-        elif timeout_stats.get("ratio_of_total", 0) > 40 and timeout_stats.get("avg_mfe_bps", 0) > 10.0:
-            failure_mode = "EXIT_INEFFICIENCY (Signals reach substantial profit but exit logic misses them)"
-        elif avg_mae < -12.0 and avg_mfe < 4.0:
-            failure_mode = "PREDICTIVE_FAILURE (Signal direction is statistically invalid)"
+            verdict = "INSUFFICIENT_SAMPLE (Accumulating >= 100 executions)"
+        elif mean_realized_bps >= 1.2 and profit_factor >= 1.30 and calibration_error_bps <= 1.0:
+            verdict = "PROVEN_POSITIVE_EDGE (Empirically Validated)"
+        elif mean_realized_bps > 0 and profit_factor >= 1.05:
+            verdict = "WEAK_PROMISING_EDGE (Execution Friction high)"
+        elif gross_alpha_usd > 0 and net_realized_usd <= 0:
+            verdict = "FRICTION_DOMINATED (Gross Alpha wiped out by Execution Fees)"
+        else:
+            verdict = "NO_EDGE_REJECTED (Negative Expectancy)"
 
         return {
-            "summary": {
-                "total_trades": total_trades,
-                "win_rate": round(win_rate, 2),
-                "profit_factor": round(profit_factor, 2) if profit_factor != float("inf") else 999.0,
-                "gross_pnl": round(float(gross_pnl), 2),
-                "total_fees": round(float(total_fees), 2),
-                "net_pnl": round(float(net_pnl), 2),
-                "gross_expectancy": round(float(gross_expectancy), 4),
-                "net_expectancy": round(float(net_expectancy), 4),
-                "avg_mfe_bps": round(float(avg_mfe), 2),
-                "avg_mae_bps": round(float(avg_mae), 2),
-                "dominant_failure_mode": failure_mode
+            "audit_header": "══════════════════════ CANONICAL QUANT AUDIT v9.0 ══════════════════════",
+            "execution_summary": {
+                "executed_trades": total_trades,
+                "wins": len(wins),
+                "losses": len(losses),
+                "tp_rate_pct": round((len(tp_hits) / total_trades) * 100.0, 2) if total_trades > 0 else 0.0,
+                "sl_rate_pct": round((len(sl_hits) / total_trades) * 100.0, 2) if total_trades > 0 else 0.0,
+                "timeout_rate_pct": round((len(timeouts) / total_trades) * 100.0, 2) if total_trades > 0 else 0.0,
+                "win_rate_pct": round(win_rate, 2),
+                "profit_factor": round(profit_factor, 2),
+                "gross_alpha_usd": round(gross_alpha_usd, 4),
+                "total_friction_usd": round(total_friction_usd, 4),
+                "net_realized_usd": round(net_realized_usd, 4),
             },
-            "attribution": {
-                "exits": exit_breakdown,
-                "symbols": symbol_breakdown,
-                "directions": direction_breakdown,
-                "confidence_calibration": confidence_calibration,
-                "timeout_analysis": timeout_stats
+            "expectancy_and_calibration": {
+                "predicted_mean_ev_bps": round(predicted_ev_bps, 2),
+                "realized_mean_ev_bps": round(mean_realized_bps, 2),
+                "ev_calibration_error_bps": calibration_error_bps,
+                "binned_calibration_matrix": binned_calibration
+            },
+            "path_dependency_attribution": {
+                "avg_mfe_directional_bps": round(float(df["mfe_bps"].mean()), 2) if "mfe_bps" in df.columns else 0.0,
+                "avg_mae_directional_bps": round(float(df["mae_bps"].mean()), 2) if "mae_bps" in df.columns else 0.0,
+            },
+            "verdict": {
+                "edge_status": verdict
             }
         }

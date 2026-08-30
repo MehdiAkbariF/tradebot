@@ -1,10 +1,12 @@
+# مسیر: python_engine/app/collectors/rss_collector.py
 import hashlib
+import json
+import time
 from datetime import datetime, timezone
 import feedparser
 from loguru import logger
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 import redis
-import time
 
 class TimeAudit(BaseModel):
     source_ts: datetime
@@ -34,7 +36,6 @@ class RSSCollector:
     def fetch_feeds(self):
         for feed_url in self.feeds:
             try:
-                logger.info(f"Polling RSS feed: {feed_url}")
                 parsed = feedparser.parse(feed_url)
                 received_ts = datetime.now(timezone.utc)
 
@@ -54,7 +55,6 @@ class RSSCollector:
                         continue
                     self.seen_hashes.add(hash_sig)
 
-                    # Parse publication time or default to now
                     pub_time = entry.get("published_parsed") or entry.get("updated_parsed")
                     if pub_time:
                         source_ts = datetime.fromtimestamp(time.mktime(pub_time), tz=timezone.utc)
@@ -62,7 +62,6 @@ class RSSCollector:
                         source_ts = received_ts
 
                     processed_ts = datetime.now(timezone.utc)
-                    available_ts = processed_ts  # Ready for engine
 
                     news_msg = RawNewsMessage(
                         id=hash_sig[:16],
@@ -75,29 +74,29 @@ class RSSCollector:
                             source_ts=source_ts,
                             received_ts=received_ts,
                             processed_ts=processed_ts,
-                            available_ts=available_ts,
+                            available_ts=processed_ts,
                         ),
                         hash_signature=hash_sig,
                     )
 
-                    # Push to Redis Stream
-                    self.redis_client.xadd(
-                        "events:news_raw",
-                        {"payload": news_msg.model_dump_json()}
-                    )
-                    logger.info(f"Published News Event: {title[:50]}...")
+                    payload_json = news_msg.model_dump_json()
+
+                    # ۱. ذخیره در استریم
+                    self.redis_client.xadd("events:news_raw", {"payload": payload_json})
+                    # ۲. انتشار همزمان روی کانال Pub/Sub برای ارسال آنی به وب‌سوکت داشبورد
+                    self.redis_client.publish("events:news_raw", payload_json)
+                    logger.info(f"📰 Published News: {title[:50]}...")
 
             except Exception as e:
                 logger.error(f"Error fetching feed {feed_url}: {e}")
 
-    def run_loop(self, interval_sec: int = 60):
+    def run_loop(self, interval_sec: int = 30):
         logger.info("Starting RSS News Collector Loop...")
         while True:
             self.fetch_feeds()
             time.sleep(interval_sec)
 
 if __name__ == "__main__":
-    # Test feeds (Crypto & Macro RSS)
     sample_feeds = [
         "https://www.coindesk.com/arc/outboundfeeds/rss/",
         "https://cointelegraph.com/rss",

@@ -1,120 +1,114 @@
-# مسیر: python_engine/app/research/feature_pipeline.py
-import os
-from datetime import datetime, timezone, timedelta
 import numpy as np
 import pandas as pd
 import lightgbm as lgb
+from sklearn.isotonic import IsotonicRegression
+from sklearn.metrics import log_loss, brier_score_loss
 from loguru import logger
-from sklearn.model_selection import train_test_split
-from sklearn.metrics import roc_auc_score
+import os
 
-FEATURE_SCHEMA_VERSION = "2.0.0"
-STRATEGY_VERSION = "wave_breakout_v1"
-
-class ScalpMultiTimeframePipeline:
-    def __init__(self, tp_bps: float = 14.0, sl_bps: float = 14.0, time_barrier_sec: int = 60):
-        self.tp_bps = tp_bps / 10000.0
-        self.sl_bps = sl_bps / 10000.0
+class CanonicalPurgedResearchPipeline:
+    def __init__(self, tp_bps: float = 6.0, sl_bps: float = 12.0, time_barrier_sec: int = 15):
+        self.tp_threshold = tp_bps / 10000.0
+        self.sl_threshold = sl_bps / 10000.0
         self.time_barrier_sec = time_barrier_sec
-        self.decay_lambda = 0.0069
-
-    def build_multitimeframe_features(self, df: pd.DataFrame) -> pd.DataFrame:
-        logger.info("Extracting Canonical Microstructure features (Strict Validation)...")
-        df = df.sort_values("timestamp").reset_index(drop=True).copy()
-
-        # ⚠️ گارد اعتبارسنجی: اگر ستون OFI نباشد، برنامه به جای تولید نویز تصادفی باید خطا دهد
-        if "ofi" not in df.columns:
-            logger.critical("Integrity Error: 'ofi' column is missing from raw dataset. Refusing to inject random noise.")
-            raise ValueError("Data Integrity Violation: Missing OFI in training pipeline.")
-
-        df["log_ret_1s"] = np.log(df["price"] / df["price"].shift(1)).fillna(0)
-        df["log_ret_5s"] = np.log(df["price"] / df["price"].shift(5)).fillna(0)
-        df["log_ret_15s"] = np.log(df["price"] / df["price"].shift(15)).fillna(0)
-        df["realized_vol_30s"] = df["log_ret_1s"].rolling(30).std().fillna(0)
-
-        df["ema_fast_15m"] = df["price"].ewm(span=900, adjust=False).mean()
-        df["ema_slow_15m"] = df["price"].ewm(span=3600, adjust=False).mean()
-        df["trend_15m_bias"] = np.where(df["ema_fast_15m"] > df["ema_slow_15m"], 1.0, -1.0)
-
-        df["cum_vol"] = df["volume"].cumsum()
-        df["cum_vol_price"] = (df["price"] * df["volume"]).cumsum()
-        df["daily_vwap"] = df["cum_vol_price"] / df["cum_vol"]
-        df["dist_to_vwap_bps"] = ((df["price"] - df["daily_vwap"]) / df["daily_vwap"]) * 10000.0
-        df["volume_surge"] = df["volume"] / df["volume"].rolling(60).mean().fillna(1)
-
-        if "decayed_sentiment" not in df.columns:
-            df["decayed_sentiment"] = 0.0
-
-        return df
-
-    def apply_triple_barrier_labels(self, df: pd.DataFrame) -> pd.DataFrame:
-        logger.info("Applying Strict Triple-Barrier labeling...")
-        prices = df["price"].values
-        n = len(prices)
-        labels = np.zeros(n, dtype=int)
-
-        for i in range(n - self.time_barrier_sec):
-            entry_price = prices[i]
-            upper_barrier = entry_price * (1.0 + self.tp_bps)
-            lower_barrier = entry_price * (1.0 - self.sl_bps)
-
-            window_prices = prices[i + 1 : i + self.time_barrier_sec + 1]
-            hit_tp = np.where(window_prices >= upper_barrier)[0]
-            hit_sl = np.where(window_prices <= lower_barrier)[0]
-
-            first_tp = hit_tp[0] if len(hit_tp) > 0 else 999999
-            first_sl = hit_sl[0] if len(hit_sl) > 0 else 999999
-
-            if first_tp < first_sl:
-                labels[i] = 1  # Long Hit Target
-            elif first_sl < first_tp:
-                labels[i] = 2  # Short Hit Target
-            else:
-                labels[i] = 0  # Timeout / Choppy
-
-        df["target"] = labels
-        return df.iloc[:-self.time_barrier_sec].reset_index(drop=True)
-
-    def train_production_model(self, df: pd.DataFrame, model_output_path: str = "scalp_lightgbm_model.txt"):
-        df_featured = self.build_multitimeframe_features(df)
-        dataset = self.apply_triple_barrier_labels(df_featured)
-
-        feature_cols = [
-            "log_ret_1s", "log_ret_5s", "log_ret_15s",
-            "realized_vol_30s", "trend_15m_bias",
-            "dist_to_vwap_bps", "volume_surge", "ofi",
-            "decayed_sentiment"
+        self.feature_columns = [
+            "log_ret_1s", "log_ret_5s", "ofi_raw", "ofi_rolling_30s",
+            "spread_bps", "realized_vol_60s", "book_imbalance"
         ]
 
-        X = dataset[feature_cols]
-        y = np.where(dataset["target"] == 1, 1, 0)
+    def extract_causal_features(self, raw_ticks_df: pd.DataFrame) -> pd.DataFrame:
+        """Construct features using only historical causal information."""
+        df = raw_ticks_df.copy()
+        df["timestamp"] = pd.to_datetime(df["timestamp"])
+        df = df.sort_values("timestamp").reset_index(drop=True)
 
-        # تقسیم زمانی اکید بدون Shuffle
-        X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, shuffle=False)
+        df["log_ret_1s"] = np.log(df["price"] / df["price"].shift(1)).fillna(0.0)
+        df["log_ret_5s"] = np.log(df["price"] / df["price"].shift(5)).fillna(0.0)
+        df["ofi_raw"] = df["ofi"].fillna(0.0)
+        df["ofi_rolling_30s"] = df["ofi_raw"].rolling(30, min_periods=1).mean()
+        df["spread_bps"] = ((df["ask"] - df["bid"]) / df["price"]).fillna(0.0) * 10000.0
+        df["realized_vol_60s"] = df["log_ret_1s"].rolling(60, min_periods=5).std().fillna(0.0001) * 10000.0
+        df["book_imbalance"] = df["book_imbalance"].fillna(0.0)
 
-        params = {
-            "objective": "binary",
-            "metric": ["auc", "binary_logloss"],
-            "boosting_type": "gbdt",
-            "learning_rate": 0.02,
-            "num_leaves": 15,
-            "max_depth": 4,
-            "min_data_in_leaf": 30,
-            "feature_fraction": 0.8,
-            "verbose": -1,
-            "n_jobs": -1
-        }
+        return df.dropna().reset_index(drop=True)
 
-        train_data = lgb.Dataset(X_train, label=y_train)
-        valid_data = lgb.Dataset(X_test, label=y_test, reference=train_data)
+    def apply_triple_barrier_labeling(self, df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Label outcomes strictly:
+        0: TIMEOUT (Unrealized decay)
+        1: TAKE_PROFIT (Upper barrier hit first)
+        2: STOP_LOSS (Lower barrier hit first)
+        """
+        timestamps = df["timestamp"].values
+        prices = df["price"].values
+        n = len(df)
+        labels = np.zeros(n, dtype=int)
+        time_limit = np.timedelta64(self.time_barrier_sec, "s")
 
-        logger.info("Training Production Model with Walk-Forward Split...")
-        model = lgb.train(params, train_data, num_boost_round=300, valid_sets=[valid_data])
+        for i in range(n):
+            t0 = timestamps[i]
+            p0 = prices[i]
+            upper_bound = p0 * (1.0 + self.tp_threshold)
+            lower_bound = p0 * (1.0 - self.sl_threshold)
 
-        test_preds = model.predict(X_test, num_iteration=model.best_iteration)
-        if len(np.unique(y_test)) > 1:
-            auc = roc_auc_score(y_test, test_preds)
-            logger.info(f"Model AUC Verified: {auc:.4f}")
+            j = i + 1
+            assigned_label = 0
+            while j < n and (timestamps[j] - t0) <= time_limit:
+                p_curr = prices[j]
+                if p_curr >= upper_bound:
+                    assigned_label = 1
+                    break
+                elif p_curr <= lower_bound:
+                    assigned_label = 2
+                    break
+                j += 1
+            labels[i] = assigned_label
+
+        df["target"] = labels
+        return df
+
+    def run_purged_walk_forward_validation(self, df: pd.DataFrame, n_splits: int = 5):
+        """Walk-Forward validation with an embargo window between train and test splits."""
+        logger.info(f"Executing Purged Walk-Forward Cross-Validation ({n_splits} folds)...")
+        labeled_df = self.apply_triple_barrier_labeling(self.extract_causal_features(df))
         
-        model.save_model(model_output_path)
-        logger.success(f"Production Model Saved: {model_output_path}")
+        split_size = len(labeled_df) // (n_splits + 1)
+        embargo = int(self.time_barrier_sec * 2) # Buffer to prevent overlapping horizon labels
+
+        fold_scores = []
+        for fold in range(1, n_splits + 1):
+            train_end = fold * split_size
+            test_start = train_end + embargo
+            test_end = test_start + split_size
+
+            if test_end > len(labeled_df):
+                break
+
+            train_data = labeled_df.iloc[:train_end]
+            test_data = labeled_df.iloc[test_start:test_end]
+
+            X_train, y_train = train_data[self.feature_columns], train_data["target"]
+            X_test, y_test = test_data[self.feature_columns], test_data["target"]
+
+            train_ds = lgb.Dataset(X_train, label=y_train)
+            val_ds = lgb.Dataset(X_test, label=y_test, reference=train_ds)
+
+            params = {
+                "objective": "multiclass",
+                "num_class": 3,
+                "metric": "multi_logloss",
+                "boosting": "gbdt",
+                "learning_rate": 0.03,
+                "num_leaves": 15,
+                "max_depth": 4,
+                "feature_fraction": 0.8,
+                "verbose": -1
+            }
+
+            booster = lgb.train(params, train_ds, num_boost_round=150, valid_sets=[val_ds])
+            raw_preds = booster.predict(X_test)
+            loss = log_loss(y_test, raw_preds)
+            fold_scores.append(loss)
+            logger.info(f"Fold {fold} Multi-LogLoss: {loss:.4f}")
+
+        logger.success(f"Mean OOS LogLoss across folds: {np.mean(fold_scores):.4f}")

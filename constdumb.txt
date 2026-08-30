@@ -1,0 +1,40 @@
+$outFile = "full_project_dump.txt"
+$excludeDirs = @("node_modules", ".next", "target", ".git", "__pycache__", ".venv", "venv", "dist", "build")
+$excludeFiles = @("package-lock.json", "Cargo.lock", "trade_ledger.json", "scalp_lightgbm_model.txt", $outFile)
+$includeExts = @(".py", ".rs", ".ts", ".tsx", ".toml", ".json", ".css", ".yml", ".yaml")
+
+# جمع‌آوری تمام فایل‌های سورس‌کد پروژه
+$files = Get-ChildItem -Recurse -File | Where-Object {
+    $path = $_.FullName
+    $dirCheck = -not ($excludeDirs | Where-Object { $path -like "*\$_*" -or $path -like "*/$_/*" })
+    $fileCheck = -not ($excludeFiles -contains $_.Name)
+    $extCheck = $includeExts -contains $_.Extension
+    $dirCheck -and $fileCheck -and $extCheck
+}
+
+$output = @()
+
+# ۱. ایجاد ساختار درختی پروژه
+$output += "=================================================="
+$output += "           PROJECT TREE STRUCTURE                 "
+$output += "=================================================="
+foreach ($f in $files) {
+    $output += (Resolve-Path -Relative $f.FullName)
+}
+$output += "`n"
+
+# ۲. خواندن و الصاق محتوای کامل سورس‌کدها
+$output += "=================================================="
+$output += "                 FILE CONTENTS                    "
+$output += "=================================================="
+foreach ($f in $files) {
+    $rel = Resolve-Path -Relative $f.FullName
+    $output += "`n=================================================="
+    $output += "FILE: $rel"
+    $output += "=================================================="
+    $output += Get-Content -Path $f.FullName -Raw
+}
+
+# ذخیره خروجی نهایی با انکودینگ استاندارد UTF-8
+$output | Out-File -FilePath $outFile -Encoding utf8
+Write-Host "✅ Done! Full project dump created successfully at: $outFile" -ForegroundColor Green

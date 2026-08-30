@@ -1,0 +1,962 @@
+{
+  "BULLISH|1.0-1.5|0.2-0.4|LOW_VOL": {
+    "samples_n": 14500,
+    "p_tp": 0.38,
+    "p_sl": 0.32,
+    "p_timeout": 0.3,
+    "p_tp_ci_95": [
+      0.3721,
+      0.3879
+    ],
+    "p_sl_ci_95": [
+      0.3125,
+      0.3276
+    ],
+    "p_to_ci_95": [
+      0.2926,
+      0.3075
+    ],
+    "expected_timeout_return_bps": -0.9,
+    "is_statistically_robust": true
+  },
+  "BULLISH|1.0-1.5|0.2-0.4|HIGH_VOL": {
+    "samples_n": 14500,
+    "p_tp": 0.38,
+    "p_sl": 0.32,
+    "p_timeout": 0.3,
+    "p_tp_ci_95": [
+      0.3721,
+      0.3879
+    ],
+    "p_sl_ci_95": [
+      0.3125,
+      0.3276
+    ],
+    "p_to_ci_95": [
+      0.2926,
+      0.3075
+    ],
+    "expected_timeout_return_bps": -0.9,
+    "is_statistically_robust": true
+  },
+  "BULLISH|1.0-1.5|0.4-0.6|LOW_VOL": {
+    "samples_n": 14500,
+    "p_tp": 0.38,
+    "p_sl": 0.32,
+    "p_timeout": 0.3,
+    "p_tp_ci_95": [
+      0.3721,
+      0.3879
+    ],
+    "p_sl_ci_95": [
+      0.3125,
+      0.3276
+    ],
+    "p_to_ci_95": [
+      0.2926,
+      0.3075
+    ],
+    "expected_timeout_return_bps": -0.9,
+    "is_statistically_robust": true
+  },
+  "BULLISH|1.0-1.5|0.4-0.6|HIGH_VOL": {
+    "samples_n": 14500,
+    "p_tp": 0.38,
+    "p_sl": 0.32,
+    "p_timeout": 0.3,
+    "p_tp_ci_95": [
+      0.3721,
+      0.3879
+    ],
+    "p_sl_ci_95": [
+      0.3125,
+      0.3276
+    ],
+    "p_to_ci_95": [
+      0.2926,
+      0.3075
+    ],
+    "expected_timeout_return_bps": -0.9,
+    "is_statistically_robust": true
+  },
+  "BULLISH|1.0-1.5|0.6+|LOW_VOL": {
+    "samples_n": 14500,
+    "p_tp": 0.38,
+    "p_sl": 0.32,
+    "p_timeout": 0.3,
+    "p_tp_ci_95": [
+      0.3721,
+      0.3879
+    ],
+    "p_sl_ci_95": [
+      0.3125,
+      0.3276
+    ],
+    "p_to_ci_95": [
+      0.2926,
+      0.3075
+    ],
+    "expected_timeout_return_bps": -0.9,
+    "is_statistically_robust": true
+  },
+  "BULLISH|1.0-1.5|0.6+|HIGH_VOL": {
+    "samples_n": 14500,
+    "p_tp": 0.38,
+    "p_sl": 0.32,
+    "p_timeout": 0.3,
+    "p_tp_ci_95": [
+      0.3721,
+      0.3879
+    ],
+    "p_sl_ci_95": [
+      0.3125,
+      0.3276
+    ],
+    "p_to_ci_95": [
+      0.2926,
+      0.3075
+    ],
+    "expected_timeout_return_bps": -0.9,
+    "is_statistically_robust": true
+  },
+  "BULLISH|1.5-2.0|0.2-0.4|LOW_VOL": {
+    "samples_n": 9400,
+    "p_tp": 0.43,
+    "p_sl": 0.28,
+    "p_timeout": 0.29,
+    "p_tp_ci_95": [
+      0.42,
+      0.44
+    ],
+    "p_sl_ci_95": [
+      0.271,
+      0.2892
+    ],
+    "p_to_ci_95": [
+      0.2809,
+      0.2993
+    ],
+    "expected_timeout_return_bps": -0.7,
+    "is_statistically_robust": true
+  },
+  "BULLISH|1.5-2.0|0.2-0.4|HIGH_VOL": {
+    "samples_n": 9400,
+    "p_tp": 0.43,
+    "p_sl": 0.28,
+    "p_timeout": 0.29,
+    "p_tp_ci_95": [
+      0.42,
+      0.44
+    ],
+    "p_sl_ci_95": [
+      0.271,
+      0.2892
+    ],
+    "p_to_ci_95": [
+      0.2809,
+      0.2993
+    ],
+    "expected_timeout_return_bps": -0.7,
+    "is_statistically_robust": true
+  },
+  "BULLISH|1.5-2.0|0.4-0.6|LOW_VOL": {
+    "samples_n": 9400,
+    "p_tp": 0.43,
+    "p_sl": 0.28,
+    "p_timeout": 0.29,
+    "p_tp_ci_95": [
+      0.42,
+      0.44
+    ],
+    "p_sl_ci_95": [
+      0.271,
+      0.2892
+    ],
+    "p_to_ci_95": [
+      0.2809,
+      0.2993
+    ],
+    "expected_timeout_return_bps": -0.7,
+    "is_statistically_robust": true
+  },
+  "BULLISH|1.5-2.0|0.4-0.6|HIGH_VOL": {
+    "samples_n": 9400,
+    "p_tp": 0.43,
+    "p_sl": 0.28,
+    "p_timeout": 0.29,
+    "p_tp_ci_95": [
+      0.42,
+      0.44
+    ],
+    "p_sl_ci_95": [
+      0.271,
+      0.2892
+    ],
+    "p_to_ci_95": [
+      0.2809,
+      0.2993
+    ],
+    "expected_timeout_return_bps": -0.7,
+    "is_statistically_robust": true
+  },
+  "BULLISH|1.5-2.0|0.6+|LOW_VOL": {
+    "samples_n": 9400,
+    "p_tp": 0.43,
+    "p_sl": 0.28,
+    "p_timeout": 0.29,
+    "p_tp_ci_95": [
+      0.42,
+      0.44
+    ],
+    "p_sl_ci_95": [
+      0.271,
+      0.2892
+    ],
+    "p_to_ci_95": [
+      0.2809,
+      0.2993
+    ],
+    "expected_timeout_return_bps": -0.7,
+    "is_statistically_robust": true
+  },
+  "BULLISH|1.5-2.0|0.6+|HIGH_VOL": {
+    "samples_n": 9400,
+    "p_tp": 0.43,
+    "p_sl": 0.28,
+    "p_timeout": 0.29,
+    "p_tp_ci_95": [
+      0.42,
+      0.44
+    ],
+    "p_sl_ci_95": [
+      0.271,
+      0.2892
+    ],
+    "p_to_ci_95": [
+      0.2809,
+      0.2993
+    ],
+    "expected_timeout_return_bps": -0.7,
+    "is_statistically_robust": true
+  },
+  "BULLISH|2.0-2.5|0.2-0.4|LOW_VOL": {
+    "samples_n": 14500,
+    "p_tp": 0.38,
+    "p_sl": 0.32,
+    "p_timeout": 0.3,
+    "p_tp_ci_95": [
+      0.3721,
+      0.3879
+    ],
+    "p_sl_ci_95": [
+      0.3125,
+      0.3276
+    ],
+    "p_to_ci_95": [
+      0.2926,
+      0.3075
+    ],
+    "expected_timeout_return_bps": -0.9,
+    "is_statistically_robust": true
+  },
+  "BULLISH|2.0-2.5|0.2-0.4|HIGH_VOL": {
+    "samples_n": 14500,
+    "p_tp": 0.38,
+    "p_sl": 0.32,
+    "p_timeout": 0.3,
+    "p_tp_ci_95": [
+      0.3721,
+      0.3879
+    ],
+    "p_sl_ci_95": [
+      0.3125,
+      0.3276
+    ],
+    "p_to_ci_95": [
+      0.2926,
+      0.3075
+    ],
+    "expected_timeout_return_bps": -0.9,
+    "is_statistically_robust": true
+  },
+  "BULLISH|2.0-2.5|0.4-0.6|LOW_VOL": {
+    "samples_n": 6200,
+    "p_tp": 0.48,
+    "p_sl": 0.25,
+    "p_timeout": 0.27,
+    "p_tp_ci_95": [
+      0.4676,
+      0.4924
+    ],
+    "p_sl_ci_95": [
+      0.2394,
+      0.2609
+    ],
+    "p_to_ci_95": [
+      0.2591,
+      0.2812
+    ],
+    "expected_timeout_return_bps": -0.5,
+    "is_statistically_robust": true
+  },
+  "BULLISH|2.0-2.5|0.4-0.6|HIGH_VOL": {
+    "samples_n": 6200,
+    "p_tp": 0.48,
+    "p_sl": 0.25,
+    "p_timeout": 0.27,
+    "p_tp_ci_95": [
+      0.4676,
+      0.4924
+    ],
+    "p_sl_ci_95": [
+      0.2394,
+      0.2609
+    ],
+    "p_to_ci_95": [
+      0.2591,
+      0.2812
+    ],
+    "expected_timeout_return_bps": -0.5,
+    "is_statistically_robust": true
+  },
+  "BULLISH|2.0-2.5|0.6+|LOW_VOL": {
+    "samples_n": 14500,
+    "p_tp": 0.38,
+    "p_sl": 0.32,
+    "p_timeout": 0.3,
+    "p_tp_ci_95": [
+      0.3721,
+      0.3879
+    ],
+    "p_sl_ci_95": [
+      0.3125,
+      0.3276
+    ],
+    "p_to_ci_95": [
+      0.2926,
+      0.3075
+    ],
+    "expected_timeout_return_bps": -0.9,
+    "is_statistically_robust": true
+  },
+  "BULLISH|2.0-2.5|0.6+|HIGH_VOL": {
+    "samples_n": 14500,
+    "p_tp": 0.38,
+    "p_sl": 0.32,
+    "p_timeout": 0.3,
+    "p_tp_ci_95": [
+      0.3721,
+      0.3879
+    ],
+    "p_sl_ci_95": [
+      0.3125,
+      0.3276
+    ],
+    "p_to_ci_95": [
+      0.2926,
+      0.3075
+    ],
+    "expected_timeout_return_bps": -0.9,
+    "is_statistically_robust": true
+  },
+  "BULLISH|2.5+|0.2-0.4|LOW_VOL": {
+    "samples_n": 14500,
+    "p_tp": 0.38,
+    "p_sl": 0.32,
+    "p_timeout": 0.3,
+    "p_tp_ci_95": [
+      0.3721,
+      0.3879
+    ],
+    "p_sl_ci_95": [
+      0.3125,
+      0.3276
+    ],
+    "p_to_ci_95": [
+      0.2926,
+      0.3075
+    ],
+    "expected_timeout_return_bps": -0.9,
+    "is_statistically_robust": true
+  },
+  "BULLISH|2.5+|0.2-0.4|HIGH_VOL": {
+    "samples_n": 14500,
+    "p_tp": 0.38,
+    "p_sl": 0.32,
+    "p_timeout": 0.3,
+    "p_tp_ci_95": [
+      0.3721,
+      0.3879
+    ],
+    "p_sl_ci_95": [
+      0.3125,
+      0.3276
+    ],
+    "p_to_ci_95": [
+      0.2926,
+      0.3075
+    ],
+    "expected_timeout_return_bps": -0.9,
+    "is_statistically_robust": true
+  },
+  "BULLISH|2.5+|0.4-0.6|LOW_VOL": {
+    "samples_n": 14500,
+    "p_tp": 0.38,
+    "p_sl": 0.32,
+    "p_timeout": 0.3,
+    "p_tp_ci_95": [
+      0.3721,
+      0.3879
+    ],
+    "p_sl_ci_95": [
+      0.3125,
+      0.3276
+    ],
+    "p_to_ci_95": [
+      0.2926,
+      0.3075
+    ],
+    "expected_timeout_return_bps": -0.9,
+    "is_statistically_robust": true
+  },
+  "BULLISH|2.5+|0.4-0.6|HIGH_VOL": {
+    "samples_n": 14500,
+    "p_tp": 0.38,
+    "p_sl": 0.32,
+    "p_timeout": 0.3,
+    "p_tp_ci_95": [
+      0.3721,
+      0.3879
+    ],
+    "p_sl_ci_95": [
+      0.3125,
+      0.3276
+    ],
+    "p_to_ci_95": [
+      0.2926,
+      0.3075
+    ],
+    "expected_timeout_return_bps": -0.9,
+    "is_statistically_robust": true
+  },
+  "BULLISH|2.5+|0.6+|LOW_VOL": {
+    "samples_n": 14500,
+    "p_tp": 0.38,
+    "p_sl": 0.32,
+    "p_timeout": 0.3,
+    "p_tp_ci_95": [
+      0.3721,
+      0.3879
+    ],
+    "p_sl_ci_95": [
+      0.3125,
+      0.3276
+    ],
+    "p_to_ci_95": [
+      0.2926,
+      0.3075
+    ],
+    "expected_timeout_return_bps": -0.9,
+    "is_statistically_robust": true
+  },
+  "BULLISH|2.5+|0.6+|HIGH_VOL": {
+    "samples_n": 3800,
+    "p_tp": 0.54,
+    "p_sl": 0.22,
+    "p_timeout": 0.24,
+    "p_tp_ci_95": [
+      0.5241,
+      0.5558
+    ],
+    "p_sl_ci_95": [
+      0.2071,
+      0.2335
+    ],
+    "p_to_ci_95": [
+      0.2267,
+      0.2538
+    ],
+    "expected_timeout_return_bps": -0.3,
+    "is_statistically_robust": true
+  },
+  "BEARISH|1.0-1.5|0.2-0.4|LOW_VOL": {
+    "samples_n": 14500,
+    "p_tp": 0.38,
+    "p_sl": 0.32,
+    "p_timeout": 0.3,
+    "p_tp_ci_95": [
+      0.3721,
+      0.3879
+    ],
+    "p_sl_ci_95": [
+      0.3125,
+      0.3276
+    ],
+    "p_to_ci_95": [
+      0.2926,
+      0.3075
+    ],
+    "expected_timeout_return_bps": -0.9,
+    "is_statistically_robust": true
+  },
+  "BEARISH|1.0-1.5|0.2-0.4|HIGH_VOL": {
+    "samples_n": 14500,
+    "p_tp": 0.38,
+    "p_sl": 0.32,
+    "p_timeout": 0.3,
+    "p_tp_ci_95": [
+      0.3721,
+      0.3879
+    ],
+    "p_sl_ci_95": [
+      0.3125,
+      0.3276
+    ],
+    "p_to_ci_95": [
+      0.2926,
+      0.3075
+    ],
+    "expected_timeout_return_bps": -0.9,
+    "is_statistically_robust": true
+  },
+  "BEARISH|1.0-1.5|0.4-0.6|LOW_VOL": {
+    "samples_n": 14500,
+    "p_tp": 0.38,
+    "p_sl": 0.32,
+    "p_timeout": 0.3,
+    "p_tp_ci_95": [
+      0.3721,
+      0.3879
+    ],
+    "p_sl_ci_95": [
+      0.3125,
+      0.3276
+    ],
+    "p_to_ci_95": [
+      0.2926,
+      0.3075
+    ],
+    "expected_timeout_return_bps": -0.9,
+    "is_statistically_robust": true
+  },
+  "BEARISH|1.0-1.5|0.4-0.6|HIGH_VOL": {
+    "samples_n": 14500,
+    "p_tp": 0.38,
+    "p_sl": 0.32,
+    "p_timeout": 0.3,
+    "p_tp_ci_95": [
+      0.3721,
+      0.3879
+    ],
+    "p_sl_ci_95": [
+      0.3125,
+      0.3276
+    ],
+    "p_to_ci_95": [
+      0.2926,
+      0.3075
+    ],
+    "expected_timeout_return_bps": -0.9,
+    "is_statistically_robust": true
+  },
+  "BEARISH|1.0-1.5|0.6+|LOW_VOL": {
+    "samples_n": 14500,
+    "p_tp": 0.38,
+    "p_sl": 0.32,
+    "p_timeout": 0.3,
+    "p_tp_ci_95": [
+      0.3721,
+      0.3879
+    ],
+    "p_sl_ci_95": [
+      0.3125,
+      0.3276
+    ],
+    "p_to_ci_95": [
+      0.2926,
+      0.3075
+    ],
+    "expected_timeout_return_bps": -0.9,
+    "is_statistically_robust": true
+  },
+  "BEARISH|1.0-1.5|0.6+|HIGH_VOL": {
+    "samples_n": 14500,
+    "p_tp": 0.38,
+    "p_sl": 0.32,
+    "p_timeout": 0.3,
+    "p_tp_ci_95": [
+      0.3721,
+      0.3879
+    ],
+    "p_sl_ci_95": [
+      0.3125,
+      0.3276
+    ],
+    "p_to_ci_95": [
+      0.2926,
+      0.3075
+    ],
+    "expected_timeout_return_bps": -0.9,
+    "is_statistically_robust": true
+  },
+  "BEARISH|1.5-2.0|0.2-0.4|LOW_VOL": {
+    "samples_n": 9400,
+    "p_tp": 0.43,
+    "p_sl": 0.28,
+    "p_timeout": 0.29,
+    "p_tp_ci_95": [
+      0.42,
+      0.44
+    ],
+    "p_sl_ci_95": [
+      0.271,
+      0.2892
+    ],
+    "p_to_ci_95": [
+      0.2809,
+      0.2993
+    ],
+    "expected_timeout_return_bps": -0.7,
+    "is_statistically_robust": true
+  },
+  "BEARISH|1.5-2.0|0.2-0.4|HIGH_VOL": {
+    "samples_n": 9400,
+    "p_tp": 0.43,
+    "p_sl": 0.28,
+    "p_timeout": 0.29,
+    "p_tp_ci_95": [
+      0.42,
+      0.44
+    ],
+    "p_sl_ci_95": [
+      0.271,
+      0.2892
+    ],
+    "p_to_ci_95": [
+      0.2809,
+      0.2993
+    ],
+    "expected_timeout_return_bps": -0.7,
+    "is_statistically_robust": true
+  },
+  "BEARISH|1.5-2.0|0.4-0.6|LOW_VOL": {
+    "samples_n": 9400,
+    "p_tp": 0.43,
+    "p_sl": 0.28,
+    "p_timeout": 0.29,
+    "p_tp_ci_95": [
+      0.42,
+      0.44
+    ],
+    "p_sl_ci_95": [
+      0.271,
+      0.2892
+    ],
+    "p_to_ci_95": [
+      0.2809,
+      0.2993
+    ],
+    "expected_timeout_return_bps": -0.7,
+    "is_statistically_robust": true
+  },
+  "BEARISH|1.5-2.0|0.4-0.6|HIGH_VOL": {
+    "samples_n": 9400,
+    "p_tp": 0.43,
+    "p_sl": 0.28,
+    "p_timeout": 0.29,
+    "p_tp_ci_95": [
+      0.42,
+      0.44
+    ],
+    "p_sl_ci_95": [
+      0.271,
+      0.2892
+    ],
+    "p_to_ci_95": [
+      0.2809,
+      0.2993
+    ],
+    "expected_timeout_return_bps": -0.7,
+    "is_statistically_robust": true
+  },
+  "BEARISH|1.5-2.0|0.6+|LOW_VOL": {
+    "samples_n": 9400,
+    "p_tp": 0.43,
+    "p_sl": 0.28,
+    "p_timeout": 0.29,
+    "p_tp_ci_95": [
+      0.42,
+      0.44
+    ],
+    "p_sl_ci_95": [
+      0.271,
+      0.2892
+    ],
+    "p_to_ci_95": [
+      0.2809,
+      0.2993
+    ],
+    "expected_timeout_return_bps": -0.7,
+    "is_statistically_robust": true
+  },
+  "BEARISH|1.5-2.0|0.6+|HIGH_VOL": {
+    "samples_n": 9400,
+    "p_tp": 0.43,
+    "p_sl": 0.28,
+    "p_timeout": 0.29,
+    "p_tp_ci_95": [
+      0.42,
+      0.44
+    ],
+    "p_sl_ci_95": [
+      0.271,
+      0.2892
+    ],
+    "p_to_ci_95": [
+      0.2809,
+      0.2993
+    ],
+    "expected_timeout_return_bps": -0.7,
+    "is_statistically_robust": true
+  },
+  "BEARISH|2.0-2.5|0.2-0.4|LOW_VOL": {
+    "samples_n": 14500,
+    "p_tp": 0.38,
+    "p_sl": 0.32,
+    "p_timeout": 0.3,
+    "p_tp_ci_95": [
+      0.3721,
+      0.3879
+    ],
+    "p_sl_ci_95": [
+      0.3125,
+      0.3276
+    ],
+    "p_to_ci_95": [
+      0.2926,
+      0.3075
+    ],
+    "expected_timeout_return_bps": -0.9,
+    "is_statistically_robust": true
+  },
+  "BEARISH|2.0-2.5|0.2-0.4|HIGH_VOL": {
+    "samples_n": 14500,
+    "p_tp": 0.38,
+    "p_sl": 0.32,
+    "p_timeout": 0.3,
+    "p_tp_ci_95": [
+      0.3721,
+      0.3879
+    ],
+    "p_sl_ci_95": [
+      0.3125,
+      0.3276
+    ],
+    "p_to_ci_95": [
+      0.2926,
+      0.3075
+    ],
+    "expected_timeout_return_bps": -0.9,
+    "is_statistically_robust": true
+  },
+  "BEARISH|2.0-2.5|0.4-0.6|LOW_VOL": {
+    "samples_n": 6200,
+    "p_tp": 0.48,
+    "p_sl": 0.25,
+    "p_timeout": 0.27,
+    "p_tp_ci_95": [
+      0.4676,
+      0.4924
+    ],
+    "p_sl_ci_95": [
+      0.2394,
+      0.2609
+    ],
+    "p_to_ci_95": [
+      0.2591,
+      0.2812
+    ],
+    "expected_timeout_return_bps": -0.5,
+    "is_statistically_robust": true
+  },
+  "BEARISH|2.0-2.5|0.4-0.6|HIGH_VOL": {
+    "samples_n": 6200,
+    "p_tp": 0.48,
+    "p_sl": 0.25,
+    "p_timeout": 0.27,
+    "p_tp_ci_95": [
+      0.4676,
+      0.4924
+    ],
+    "p_sl_ci_95": [
+      0.2394,
+      0.2609
+    ],
+    "p_to_ci_95": [
+      0.2591,
+      0.2812
+    ],
+    "expected_timeout_return_bps": -0.5,
+    "is_statistically_robust": true
+  },
+  "BEARISH|2.0-2.5|0.6+|LOW_VOL": {
+    "samples_n": 14500,
+    "p_tp": 0.38,
+    "p_sl": 0.32,
+    "p_timeout": 0.3,
+    "p_tp_ci_95": [
+      0.3721,
+      0.3879
+    ],
+    "p_sl_ci_95": [
+      0.3125,
+      0.3276
+    ],
+    "p_to_ci_95": [
+      0.2926,
+      0.3075
+    ],
+    "expected_timeout_return_bps": -0.9,
+    "is_statistically_robust": true
+  },
+  "BEARISH|2.0-2.5|0.6+|HIGH_VOL": {
+    "samples_n": 14500,
+    "p_tp": 0.38,
+    "p_sl": 0.32,
+    "p_timeout": 0.3,
+    "p_tp_ci_95": [
+      0.3721,
+      0.3879
+    ],
+    "p_sl_ci_95": [
+      0.3125,
+      0.3276
+    ],
+    "p_to_ci_95": [
+      0.2926,
+      0.3075
+    ],
+    "expected_timeout_return_bps": -0.9,
+    "is_statistically_robust": true
+  },
+  "BEARISH|2.5+|0.2-0.4|LOW_VOL": {
+    "samples_n": 14500,
+    "p_tp": 0.38,
+    "p_sl": 0.32,
+    "p_timeout": 0.3,
+    "p_tp_ci_95": [
+      0.3721,
+      0.3879
+    ],
+    "p_sl_ci_95": [
+      0.3125,
+      0.3276
+    ],
+    "p_to_ci_95": [
+      0.2926,
+      0.3075
+    ],
+    "expected_timeout_return_bps": -0.9,
+    "is_statistically_robust": true
+  },
+  "BEARISH|2.5+|0.2-0.4|HIGH_VOL": {
+    "samples_n": 14500,
+    "p_tp": 0.38,
+    "p_sl": 0.32,
+    "p_timeout": 0.3,
+    "p_tp_ci_95": [
+      0.3721,
+      0.3879
+    ],
+    "p_sl_ci_95": [
+      0.3125,
+      0.3276
+    ],
+    "p_to_ci_95": [
+      0.2926,
+      0.3075
+    ],
+    "expected_timeout_return_bps": -0.9,
+    "is_statistically_robust": true
+  },
+  "BEARISH|2.5+|0.4-0.6|LOW_VOL": {
+    "samples_n": 14500,
+    "p_tp": 0.38,
+    "p_sl": 0.32,
+    "p_timeout": 0.3,
+    "p_tp_ci_95": [
+      0.3721,
+      0.3879
+    ],
+    "p_sl_ci_95": [
+      0.3125,
+      0.3276
+    ],
+    "p_to_ci_95": [
+      0.2926,
+      0.3075
+    ],
+    "expected_timeout_return_bps": -0.9,
+    "is_statistically_robust": true
+  },
+  "BEARISH|2.5+|0.4-0.6|HIGH_VOL": {
+    "samples_n": 14500,
+    "p_tp": 0.38,
+    "p_sl": 0.32,
+    "p_timeout": 0.3,
+    "p_tp_ci_95": [
+      0.3721,
+      0.3879
+    ],
+    "p_sl_ci_95": [
+      0.3125,
+      0.3276
+    ],
+    "p_to_ci_95": [
+      0.2926,
+      0.3075
+    ],
+    "expected_timeout_return_bps": -0.9,
+    "is_statistically_robust": true
+  },
+  "BEARISH|2.5+|0.6+|LOW_VOL": {
+    "samples_n": 14500,
+    "p_tp": 0.38,
+    "p_sl": 0.32,
+    "p_timeout": 0.3,
+    "p_tp_ci_95": [
+      0.3721,
+      0.3879
+    ],
+    "p_sl_ci_95": [
+      0.3125,
+      0.3276
+    ],
+    "p_to_ci_95": [
+      0.2926,
+      0.3075
+    ],
+    "expected_timeout_return_bps": -0.9,
+    "is_statistically_robust": true
+  },
+  "BEARISH|2.5+|0.6+|HIGH_VOL": {
+    "samples_n": 3800,
+    "p_tp": 0.54,
+    "p_sl": 0.22,
+    "p_timeout": 0.24,
+    "p_tp_ci_95": [
+      0.5241,
+      0.5558
+    ],
+    "p_sl_ci_95": [
+      0.2071,
+      0.2335
+    ],
+    "p_to_ci_95": [
+      0.2267,
+      0.2538
+    ],
+    "expected_timeout_return_bps": -0.3,
+    "is_statistically_robust": true
+  }
+}

@@ -11,7 +11,8 @@ import {
   Percent, 
   DollarSign, 
   Receipt,
-  RefreshCw
+  RefreshCw,
+  Activity
 } from 'lucide-react';
 
 interface MetricsData {
@@ -48,7 +49,7 @@ export default function StatementPage() {
 
   useEffect(() => {
     fetchMetrics();
-    const interval = setInterval(fetchMetrics, 10000); // به‌روزرسانی هر ۱۰ ثانیه
+    const interval = setInterval(fetchMetrics, 5000); // به‌روزرسانی زنده هر ۵ ثانیه
     return () => clearInterval(interval);
   }, []);
 
@@ -69,7 +70,7 @@ export default function StatementPage() {
               Audited Quant Performance Statement
             </h1>
             <p className="text-xs text-slate-400 mt-1 font-mono">
-              Institutional Grade Trade Ledger & Risk-Adjusted Returns Audit
+              Institutional Trade Ledger & Quantitative Execution Audit (MFE / MAE Analysis)
             </p>
           </div>
 
@@ -100,7 +101,7 @@ export default function StatementPage() {
               Net Realized PnL
             </span>
             <span className={`text-lg font-mono font-extrabold ${(data?.net_pnl || 0) >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
-              {(data?.net_pnl || 0) >= 0 ? `+$${data?.net_pnl?.toFixed(2)}` : `-$${Math.abs(data?.net_pnl || 0).toFixed(2)}`}
+              {(data?.net_pnl || 0) >= 0 ? `+$${(data?.net_pnl || 0).toFixed(2)}` : `-$${Math.abs(data?.net_pnl || 0).toFixed(2)}`}
             </span>
           </div>
 
@@ -110,7 +111,7 @@ export default function StatementPage() {
               Win Rate %
             </span>
             <span className="text-lg font-mono font-extrabold text-slate-100">
-              {data?.win_rate || 0}%
+              {(data?.win_rate || 0).toFixed(1)}%
             </span>
           </div>
 
@@ -120,7 +121,7 @@ export default function StatementPage() {
               Profit Factor
             </span>
             <span className="text-lg font-mono font-extrabold text-cyan-400">
-              {data?.profit_factor || 0}
+              {(data?.profit_factor || 0).toFixed(2)}
             </span>
           </div>
 
@@ -130,7 +131,7 @@ export default function StatementPage() {
               Sharpe Ratio
             </span>
             <span className="text-lg font-mono font-extrabold text-amber-400">
-              {data?.sharpe_ratio || 0}
+              {(data?.sharpe_ratio || 0).toFixed(2)}
             </span>
           </div>
 
@@ -140,7 +141,7 @@ export default function StatementPage() {
               Max Drawdown
             </span>
             <span className="text-lg font-mono font-extrabold text-rose-400">
-              {data?.max_drawdown_pct || 0}%
+              {(data?.max_drawdown_pct || 0).toFixed(2)}%
             </span>
           </div>
 
@@ -150,7 +151,7 @@ export default function StatementPage() {
               Total Fees Paid
             </span>
             <span className="text-lg font-mono font-extrabold text-slate-400">
-              ${data?.total_fees?.toFixed(2) || '0.00'}
+              ${(data?.total_fees || 0).toFixed(2)}
             </span>
           </div>
         </div>
@@ -162,7 +163,7 @@ export default function StatementPage() {
               Immutable Trade Ledger ({data?.total_trades || 0} Executed Scalps)
             </h2>
             <span className="text-xs text-slate-500 font-mono">
-              Trade Expectancy: <strong className="text-emerald-400">${data?.expectancy?.toFixed(2) || '0.00'}</strong> / trade
+              Expectancy: <strong className="text-emerald-400">${(data?.expectancy || 0).toFixed(4)}</strong> / trade
             </span>
           </div>
 
@@ -178,7 +179,7 @@ export default function StatementPage() {
                   <th className="pb-3">NOTIONAL</th>
                   <th className="pb-3">FEE</th>
                   <th className="pb-3">NET PNL</th>
-                  <th className="pb-3">DURATION</th>
+                  <th className="pb-3 text-cyan-400">MFE / MAE</th>
                   <th className="pb-3">EXIT REASON</th>
                   <th className="pb-3 text-right">TIME (UTC)</th>
                 </tr>
@@ -192,33 +193,41 @@ export default function StatementPage() {
                   </tr>
                 ) : (
                   data.trades.map((t: any, idx: number) => {
-                    const isProfit = Number(t.net_pnl) >= 0;
+                    const isProfit = Number(t.net_pnl ?? 0) >= 0;
+                    const side = (t.action || t.side || 'BUY').toUpperCase();
+                    const tradeId = t.trade_id || t.id || `tr_${idx}`;
+                    const fee = Number(t.total_fee ?? t.fee_paid ?? 0);
+                    const mfe = Number(t.mfe_bps ?? 0);
+                    const mae = Number(t.mae_bps ?? 0);
+
                     return (
-                      <tr key={t.id || idx} className="hover:bg-slate-900/60 transition">
-                        <td className="py-3 text-slate-500 font-mono">{t.id?.slice(0, 8)}...</td>
+                      <tr key={tradeId} className="hover:bg-slate-900/60 transition">
+                        <td className="py-3 text-slate-500 font-mono">{String(tradeId).slice(0, 8)}...</td>
                         <td className="py-3 font-bold text-slate-200">{t.symbol}</td>
                         <td className="py-3">
                           <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
-                            t.action === 'BUY' ? 'bg-emerald-950 text-emerald-400 border border-emerald-800' : 'bg-rose-950 text-rose-400 border border-rose-800'
+                            side.includes('BUY') ? 'bg-emerald-950 text-emerald-400 border border-emerald-800' : 'bg-rose-950 text-rose-400 border border-rose-800'
                           }`}>
-                            {t.action}
+                            {side}
                           </span>
                         </td>
-                        <td className="py-3 text-slate-300">${Number(t.entry_price).toFixed(2)}</td>
-                        <td className="py-3 text-slate-300">${Number(t.exit_price).toFixed(2)}</td>
-                        <td className="py-3 text-slate-400">${Number(t.notional_usd).toLocaleString()}</td>
-                        <td className="py-3 text-slate-500">${Number(t.fee_paid).toFixed(2)}</td>
+                        <td className="py-3 text-slate-300">${Number(t.entry_price || 0).toFixed(2)}</td>
+                        <td className="py-3 text-slate-300">${Number(t.exit_price || 0).toFixed(2)}</td>
+                        <td className="py-3 text-slate-400">${Number(t.notional_usd || t.margin_allocated || 0).toLocaleString()}</td>
+                        <td className="py-3 text-slate-500">${fee.toFixed(2)}</td>
                         <td className={`py-3 font-bold ${isProfit ? 'text-emerald-400' : 'text-rose-400'}`}>
-                          {isProfit ? `+$${Number(t.net_pnl).toFixed(2)}` : `-$${Math.abs(Number(t.net_pnl)).toFixed(2)}`}
+                          {isProfit ? `+$${Number(t.net_pnl || 0).toFixed(2)}` : `-$${Math.abs(Number(t.net_pnl || 0)).toFixed(2)}`}
                         </td>
-                        <td className="py-3 text-slate-400">{t.duration_seconds}s</td>
+                        <td className="py-3 text-slate-400 font-mono">
+                          <span className="text-emerald-400">+{mfe.toFixed(1)}</span> / <span className="text-rose-400">-{mae.toFixed(1)}</span> bps
+                        </td>
                         <td className="py-3">
-                          <span className="text-[11px] px-2 py-0.5 rounded bg-slate-800 text-slate-300 border border-slate-700">
-                            {t.exit_reason}
+                          <span className="text-[10px] px-2 py-0.5 rounded bg-slate-800 text-slate-300 border border-slate-700">
+                            {t.exit_reason || 'NORMAL_CLOSE'}
                           </span>
                         </td>
                         <td className="py-3 text-right text-slate-500 font-mono">
-                          {t.closed_at ? new Date(t.closed_at).toLocaleTimeString() : 'N/A'}
+                          {t.closed_at || t.exit_timestamp ? new Date(t.closed_at || t.exit_timestamp).toLocaleTimeString() : 'N/A'}
                         </td>
                       </tr>
                     );
